@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { supabase } from "./supabase";
 
 const defaultProfile = {
   reactsToLoss: 0.5,
@@ -143,6 +144,7 @@ function buttonStyle(kind = "primary") {
     padding: "14px 16px",
     fontWeight: 800,
     fontSize: 16,
+    cursor: "pointer",
   };
 
   if (kind === "accent") {
@@ -169,8 +171,87 @@ function buttonStyle(kind = "primary") {
   };
 }
 
+function inputStyle() {
+  return {
+    width: "100%",
+    padding: "14px 16px",
+    borderRadius: 14,
+    border: "1px solid rgba(255,255,255,0.12)",
+    background: "rgba(255,255,255,0.06)",
+    color: "#fff",
+    fontSize: 16,
+    boxSizing: "border-box",
+    outline: "none",
+  };
+}
+
+function LoginScreen({ email, setEmail, onLogin, loading, message }) {
+  return (
+    <div
+      style={{
+        minHeight: "100vh",
+        background:
+          "radial-gradient(circle at top, rgba(99,102,241,0.16), transparent 30%), #05070D",
+        color: "#fff",
+        padding: 20,
+        fontFamily: "system-ui, sans-serif",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      <div style={{ width: "100%", maxWidth: 420 }}>
+        <div style={cardStyle()}>
+          <div
+            style={{
+              fontSize: 12,
+              fontWeight: 900,
+              letterSpacing: "0.18em",
+              opacity: 0.7,
+            }}
+          >
+            KOLEHTI
+          </div>
+          <h1 style={{ margin: "8px 0 0", fontSize: 38, lineHeight: 1, fontWeight: 900 }}>
+            Kirjaudu sisään
+          </h1>
+          <div style={{ marginTop: 10, opacity: 0.75 }}>
+            Saat sähköpostiisi kirjautumislinkin.
+          </div>
+
+          <div style={{ marginTop: 18 }}>
+            <input
+              type="email"
+              placeholder="sinä@esimerkki.fi"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              style={inputStyle()}
+            />
+          </div>
+
+          <div style={{ marginTop: 12 }}>
+            <button onClick={onLogin} style={buttonStyle()} disabled={loading}>
+              {loading ? "Lähetetään..." : "Lähetä kirjautumislinkki"}
+            </button>
+          </div>
+
+          {message ? (
+            <div style={{ marginTop: 14, opacity: 0.85, fontSize: 14 }}>{message}</div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const ai = useKolehtiAI();
+
+  const [user, setUser] = useState(null);
+  const [authLoaded, setAuthLoaded] = useState(false);
+  const [email, setEmail] = useState("");
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [loginMessage, setLoginMessage] = useState("");
 
   const [rank, setRank] = useState(3);
   const [gap, setGap] = useState(2);
@@ -181,6 +262,24 @@ export default function App() {
   useEffect(() => {
     document.body.style.margin = "0";
     document.body.style.background = "#05070D";
+  }, []);
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => {
+      setUser(data?.user ?? null);
+      setAuthLoaded(true);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      setAuthLoaded(true);
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
@@ -211,6 +310,33 @@ export default function App() {
       }),
     [lastEvent, gap, momentum, ai.profile]
   );
+
+  async function login() {
+    if (!email) {
+      setLoginMessage("Lisää sähköpostiosoite");
+      return;
+    }
+
+    setLoginLoading(true);
+    setLoginMessage("");
+
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+    });
+
+    if (error) {
+      setLoginMessage("Kirjautuminen epäonnistui");
+    } else {
+      setLoginMessage("Tarkista sähköposti");
+    }
+
+    setLoginLoading(false);
+  }
+
+  async function logout() {
+    await supabase.auth.signOut();
+    setToast("Kirjauduit ulos");
+  }
 
   function vote() {
     setRank((r) => Math.max(1, r - 1));
@@ -254,6 +380,36 @@ export default function App() {
     ai.resetProfile();
   }
 
+  if (!authLoaded) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          background: "#05070D",
+          color: "#fff",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontFamily: "system-ui, sans-serif",
+        }}
+      >
+        Ladataan...
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <LoginScreen
+        email={email}
+        setEmail={setEmail}
+        onLogin={login}
+        loading={loginLoading}
+        message={loginMessage}
+      />
+    );
+  }
+
   return (
     <div
       style={{
@@ -295,7 +451,9 @@ export default function App() {
           <h1 style={{ margin: "8px 0 0", fontSize: 42, lineHeight: 1, fontWeight: 900 }}>
             Kolehti AI
           </h1>
-          <div style={{ marginTop: 10, opacity: 0.75 }}>Kilpailu käynnissä juuri nyt</div>
+          <div style={{ marginTop: 10, opacity: 0.75 }}>
+            {user.email || "Kirjautunut käyttäjä"}
+          </div>
         </div>
 
         <div style={{ ...cardStyle(), marginBottom: 12 }}>
@@ -349,6 +507,9 @@ export default function App() {
             </button>
             <button onClick={resetAll} style={buttonStyle("ghost")}>
               Resetoi tila
+            </button>
+            <button onClick={logout} style={buttonStyle("ghost")}>
+              Kirjaudu ulos
             </button>
           </div>
         </div>

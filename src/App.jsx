@@ -256,6 +256,9 @@ export default function App() {
   const [posts, setPosts] = useState([]);
   const [postsLoaded, setPostsLoaded] = useState(false);
 
+  const [purchases, setPurchases] = useState([]);
+  const [purchasesLoaded, setPurchasesLoaded] = useState(false);
+
   const [rank, setRank] = useState(3);
   const [gap, setGap] = useState(2);
   const [momentum, setMomentum] = useState(20);
@@ -332,7 +335,6 @@ export default function App() {
       setPosts(rows);
 
       const myIndex = rows.findIndex((p) => p.user_id === user.id);
-
       if (myIndex >= 0) {
         const myRank = myIndex + 1;
         const myVotes = rows[myIndex].votes || 0;
@@ -352,15 +354,30 @@ export default function App() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "posts" },
-        () => {
-          loadPosts();
-        }
+        () => loadPosts()
       )
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    async function loadPurchases() {
+      const { data } = await supabase
+        .from("purchases")
+        .select("*")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false });
+
+      setPurchases(data || []);
+      setPurchasesLoaded(true);
+    }
+
+    loadPurchases();
   }, [user?.id]);
 
   useEffect(() => {
@@ -424,22 +441,37 @@ export default function App() {
 
   async function vote() {
     const myPost = posts.find((p) => p.user_id === user.id);
+
     if (!myPost) {
       setToast("Omaa kolehtia ei löytynyt");
       return;
     }
 
-    const nextVotes = (myPost.votes || 0) + 1;
+    const currentVotes = myPost.votes || 0;
+    const nextVotes = currentVotes + 1;
 
     const { error } = await supabase
       .from("posts")
       .update({ votes: nextVotes })
-      .eq("id", myPost.id);
+      .eq("id", myPost.id)
+      .eq("user_id", user.id);
 
     if (error) {
-      setToast("Äänestys epäonnistui");
+      setToast(`Äänestys epäonnistui: ${error.message}`);
       return;
     }
+
+    await supabase.from("events").insert({
+      user_id: user.id,
+      type: "vote",
+      value: 1,
+    });
+
+    setPosts((prev) =>
+      prev.map((post) =>
+        post.id === myPost.id ? { ...post, votes: nextVotes } : post
+      )
+    );
 
     setMomentum((m) => Math.min(100, m + 10));
     setLastEvent("vote");
@@ -457,15 +489,66 @@ export default function App() {
     ai.learnLoss();
   }
 
-  function buyOffer() {
+  async function buyOffer() {
     if (!offer) return;
+
+    const { error: purchaseError } = await supabase.from("purchases").insert({
+      user_id: user.id,
+      offer_code: offer.code,
+      price_eur: offer.price,
+      status: "completed",
+      meta: {
+        title: offer.title,
+        cta: offer.cta,
+      },
+    });
+
+    if (purchaseError) {
+      setToast(`Osto epäonnistui: ${purchaseError.message}`);
+      return;
+    }
+
+    await supabase.from("events").insert({
+      user_id: user.id,
+      type: "purchase",
+      value: Math.round(offer.price * 100),
+      meta: {
+        code: offer.code,
+        title: offer.title,
+      },
+    });
+
+    setPurchases((prev) => [
+      {
+        id: crypto.randomUUID(),
+        user_id: user.id,
+        offer_code: offer.code,
+        price_eur: offer.price,
+        status: "completed",
+        created_at: new Date().toISOString(),
+      },
+      ...prev,
+    ]);
+
     setMomentum((m) => Math.min(100, m + 20));
     setLastEvent("purchase");
-    setToast(`💰 Ostit: ${offer.cta} (${offer.price} €)`);
+    setToast(`💰 Osto tallennettu: ${offer.cta} (${offer.price} €)`);
     ai.learnPurchase(offer.code);
   }
 
-  function ignoreOffer() {
+  async function ignoreOffer() {
+    if (offer) {
+      await supabase.from("events").insert({
+        user_id: user.id,
+        type: "offer_ignored",
+        value: 0,
+        meta: {
+          code: offer.code,
+          title: offer.title,
+        },
+      });
+    }
+
     setToast("👌 Tarjous ohitettu");
     ai.learnIgnore();
   }
@@ -479,6 +562,7 @@ export default function App() {
 
   const leaderboard = posts.slice(0, 10);
   const myPost = posts.find((p) => p.user_id === user?.id);
+  const totalSpent = purchases.reduce((sum, item) => sum + Number(item.price_eur || 0), 0);
 
   if (!authLoaded) {
     return (
@@ -510,7 +594,7 @@ export default function App() {
     );
   }
 
-  if (!postsLoaded) {
+  if (!postsLoaded || !purchasesLoaded) {
     return (
       <div
         style={{
@@ -523,7 +607,7 @@ export default function App() {
           fontFamily: "system-ui, sans-serif",
         }}
       >
-        Ladataan kolehteja...
+        Ladataan dataa...
       </div>
     );
   }
@@ -584,6 +668,9 @@ export default function App() {
           <div style={{ marginTop: 10, opacity: 0.82 }}>
             Omat äänet: {myPost?.votes ?? 0}
           </div>
+          <div style={{ marginTop: 10, opacity: 0.82 }}>
+            Ostot yhteensä: {totalSpent.toFixed(2)} €
+          </div>
         </div>
 
         <div style={{ ...cardStyle(), marginBottom: 12 }}>
@@ -632,9 +719,10 @@ export default function App() {
                   gap: 12,
                   padding: "10px 12px",
                   borderRadius: 12,
-                  background: post.user_id === user.id
-                    ? "rgba(99,102,241,0.18)"
-                    : "rgba(255,255,255,0.04)",
+                  background:
+                    post.user_id === user.id
+                      ? "rgba(99,102,241,0.18)"
+                      : "rgba(255,255,255,0.04)",
                 }}
               >
                 <div style={{ fontWeight: 700 }}>
@@ -643,6 +731,32 @@ export default function App() {
                 <div style={{ opacity: 0.85 }}>{post.votes} ääntä</div>
               </div>
             ))}
+          </div>
+        </div>
+
+        <div style={{ ...cardStyle(), marginBottom: 12 }}>
+          <div style={{ fontSize: 14, opacity: 0.75, marginBottom: 12 }}>Viimeisimmät ostot</div>
+          <div style={{ display: "grid", gap: 8 }}>
+            {purchases.length === 0 ? (
+              <div style={{ opacity: 0.7 }}>Ei vielä ostoja</div>
+            ) : (
+              purchases.slice(0, 5).map((purchase) => (
+                <div
+                  key={purchase.id}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 12,
+                    padding: "10px 12px",
+                    borderRadius: 12,
+                    background: "rgba(255,255,255,0.04)",
+                  }}
+                >
+                  <div style={{ fontWeight: 700 }}>{purchase.offer_code}</div>
+                  <div style={{ opacity: 0.85 }}>{purchase.price_eur} €</div>
+                </div>
+              ))
+            )}
           </div>
         </div>
 

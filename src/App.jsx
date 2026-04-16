@@ -18,19 +18,19 @@ function safeParse(value, fallback) {
   }
 }
 
-function loadProfile() {
+function loadAiProfile() {
   return safeParse(localStorage.getItem("kolehti_ai_profile"), defaultProfile);
 }
 
-function saveProfile(profile) {
+function saveAiProfile(profile) {
   localStorage.setItem("kolehti_ai_profile", JSON.stringify(profile));
 }
 
 function useKolehtiAI() {
-  const [profile, setProfile] = useState(loadProfile);
+  const [profile, setProfile] = useState(loadAiProfile);
 
   useEffect(() => {
-    saveProfile(profile);
+    saveAiProfile(profile);
   }, [profile]);
 
   return {
@@ -253,6 +253,9 @@ export default function App() {
   const [loginLoading, setLoginLoading] = useState(false);
   const [loginMessage, setLoginMessage] = useState("");
 
+  const [posts, setPosts] = useState([]);
+  const [postsLoaded, setPostsLoaded] = useState(false);
+
   const [rank, setRank] = useState(3);
   const [gap, setGap] = useState(2);
   const [momentum, setMomentum] = useState(20);
@@ -281,6 +284,84 @@ export default function App() {
       subscription.unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    if (!user?.id || !user?.email) return;
+
+    async function ensureProfileAndPost() {
+      await supabase.from("profiles").upsert({
+        id: user.id,
+        email: user.email,
+      });
+
+      const { data: existingPost } = await supabase
+        .from("posts")
+        .select("*")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      if (!existingPost) {
+        await supabase.from("posts").insert({
+          user_id: user.id,
+          title: `${user.email.split("@")[0]}n kolehti`,
+          votes: 0,
+        });
+      }
+    }
+
+    ensureProfileAndPost();
+  }, [user?.id, user?.email]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    async function loadPosts() {
+      const { data, error } = await supabase
+        .from("posts")
+        .select("*")
+        .order("votes", { ascending: false })
+        .order("created_at", { ascending: true });
+
+      if (error) {
+        setToast("Postien lataus epäonnistui");
+        setPostsLoaded(true);
+        return;
+      }
+
+      const rows = data || [];
+      setPosts(rows);
+
+      const myIndex = rows.findIndex((p) => p.user_id === user.id);
+
+      if (myIndex >= 0) {
+        const myRank = myIndex + 1;
+        const myVotes = rows[myIndex].votes || 0;
+        const aboveVotes = myIndex > 0 ? rows[myIndex - 1].votes || 0 : myVotes;
+
+        setRank(myRank);
+        setGap(myRank === 1 ? 0 : Math.max(1, aboveVotes - myVotes));
+      }
+
+      setPostsLoaded(true);
+    }
+
+    loadPosts();
+
+    const channel = supabase
+      .channel("posts-live")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "posts" },
+        () => {
+          loadPosts();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id]);
 
   useEffect(() => {
     if (!toast) return;
@@ -313,7 +394,7 @@ export default function App() {
 
   async function login() {
     if (!email) {
-      setLoginMessage("Lisää sähköpostiosoite");
+      setLoginMessage("Lisää sähköposti");
       return;
     }
 
@@ -322,10 +403,13 @@ export default function App() {
 
     const { error } = await supabase.auth.signInWithOtp({
       email,
+      options: {
+        emailRedirectTo: window.location.origin,
+      },
     });
 
     if (error) {
-      setLoginMessage("Kirjautuminen epäonnistui");
+      setLoginMessage(`Virhe: ${error.message}`);
     } else {
       setLoginMessage("Tarkista sähköposti");
     }
@@ -338,9 +422,25 @@ export default function App() {
     setToast("Kirjauduit ulos");
   }
 
-  function vote() {
-    setRank((r) => Math.max(1, r - 1));
-    setGap((g) => Math.max(0, g - 1));
+  async function vote() {
+    const myPost = posts.find((p) => p.user_id === user.id);
+    if (!myPost) {
+      setToast("Omaa kolehtia ei löytynyt");
+      return;
+    }
+
+    const nextVotes = (myPost.votes || 0) + 1;
+
+    const { error } = await supabase
+      .from("posts")
+      .update({ votes: nextVotes })
+      .eq("id", myPost.id);
+
+    if (error) {
+      setToast("Äänestys epäonnistui");
+      return;
+    }
+
     setMomentum((m) => Math.min(100, m + 10));
     setLastEvent("vote");
     setToast("👍 Ääni annettu");
@@ -351,9 +451,8 @@ export default function App() {
   }
 
   function lose() {
-    setRank((r) => r + 1);
-    setGap(1);
     setLastEvent("lost");
+    setGap(1);
     setToast("⚠️ Sinut ohitettiin");
     ai.learnLoss();
   }
@@ -372,13 +471,14 @@ export default function App() {
   }
 
   function resetAll() {
-    setRank(3);
-    setGap(2);
     setMomentum(20);
     setLastEvent(null);
     setToast("↺ Tila resetoitu");
     ai.resetProfile();
   }
+
+  const leaderboard = posts.slice(0, 10);
+  const myPost = posts.find((p) => p.user_id === user?.id);
 
   if (!authLoaded) {
     return (
@@ -407,6 +507,24 @@ export default function App() {
         loading={loginLoading}
         message={loginMessage}
       />
+    );
+  }
+
+  if (!postsLoaded) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          background: "#05070D",
+          color: "#fff",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontFamily: "system-ui, sans-serif",
+        }}
+      >
+        Ladataan kolehteja...
+      </div>
     );
   }
 
@@ -457,11 +575,14 @@ export default function App() {
         </div>
 
         <div style={{ ...cardStyle(), marginBottom: 12 }}>
-          <div style={{ fontSize: 14, opacity: 0.75, marginBottom: 10 }}>Tilanne</div>
+          <div style={{ fontSize: 14, opacity: 0.75, marginBottom: 10 }}>Oma tilanne</div>
           <div style={{ fontSize: 34, fontWeight: 900 }}>Sijoitus: #{rank}</div>
           <div style={{ marginTop: 8, fontSize: 20, fontWeight: 800 }}>{smart.title}</div>
           <div style={{ marginTop: 10, opacity: 0.82 }}>
             Ero: {gap} · Momentum: {momentum}
+          </div>
+          <div style={{ marginTop: 10, opacity: 0.82 }}>
+            Omat äänet: {myPost?.votes ?? 0}
           </div>
         </div>
 
@@ -498,6 +619,32 @@ export default function App() {
             </div>
           </div>
         ) : null}
+
+        <div style={{ ...cardStyle(), marginBottom: 12 }}>
+          <div style={{ fontSize: 14, opacity: 0.75, marginBottom: 12 }}>Leaderboard</div>
+          <div style={{ display: "grid", gap: 8 }}>
+            {leaderboard.map((post, index) => (
+              <div
+                key={post.id}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: 12,
+                  padding: "10px 12px",
+                  borderRadius: 12,
+                  background: post.user_id === user.id
+                    ? "rgba(99,102,241,0.18)"
+                    : "rgba(255,255,255,0.04)",
+                }}
+              >
+                <div style={{ fontWeight: 700 }}>
+                  #{index + 1} {post.title}
+                </div>
+                <div style={{ opacity: 0.85 }}>{post.votes} ääntä</div>
+              </div>
+            ))}
+          </div>
+        </div>
 
         <div style={{ ...cardStyle(), marginBottom: 12 }}>
           <div style={{ fontSize: 14, opacity: 0.75, marginBottom: 12 }}>Testaus</div>

@@ -26,6 +26,60 @@ function saveAiProfile(profile) {
   localStorage.setItem("kolehti_ai_profile", JSON.stringify(profile));
 }
 
+function clamp01(value) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function isFounderEmail(email) {
+  const founderEmails = ["sun@email.com"];
+  return founderEmails.includes(email || "");
+}
+
+async function logAppError({ userId, area, message, meta = {} }) {
+  try {
+    await supabase.from("app_errors").insert({
+      user_id: userId || null,
+      area,
+      message,
+      meta,
+    });
+  } catch {
+    // no-op
+  }
+}
+
+async function ensureProfileAndPost(currentUser) {
+  if (!currentUser?.id || !currentUser?.email) return null;
+
+  await supabase.from("profiles").upsert({
+    id: currentUser.id,
+    email: currentUser.email,
+  });
+
+  const { data: existingPost, error: postError } = await supabase
+    .from("posts")
+    .select("*")
+    .eq("user_id", currentUser.id)
+    .maybeSingle();
+
+  if (postError) throw postError;
+  if (existingPost) return existingPost;
+
+  const { data: newPost, error: insertError } = await supabase
+    .from("posts")
+    .insert({
+      user_id: currentUser.id,
+      title: `${currentUser.email.split("@")[0]}n kolehti`,
+      votes: 0,
+      visibility_score: 0,
+    })
+    .select()
+    .single();
+
+  if (insertError) throw insertError;
+  return newPost;
+}
+
 function useKolehtiAI() {
   const [profile, setProfile] = useState(loadAiProfile);
 
@@ -77,7 +131,6 @@ function getBoostConfig(drawType) {
 function getNextBoost(drawType, used) {
   const config = getBoostConfig(drawType);
   if (used >= config.limit) return null;
-
   return {
     price: config.prices[used],
     remaining: config.limit - used,
@@ -107,28 +160,16 @@ function formatCooldown(ms) {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-function scoreBoostMoment({
-  justLost,
-  gapToNext,
-  momentum,
-  boostsRemaining,
-  boostsUsed,
-  profile,
-}) {
+function scoreBoostMoment({ justLost, gapToNext, momentum, boostsRemaining, boostsUsed, profile }) {
   if (boostsRemaining <= 0) return 0;
-
   let score = 0;
-
   if (justLost) score += 45 + profile.reactsToLoss * 30;
   if (gapToNext <= 1) score += 30 + profile.reactsToAlmostWin * 25;
   else if (gapToNext === 2) score += 12;
-
   if (momentum >= 70) score += 18 + profile.reactsToMomentum * 15;
   else if (momentum >= 50) score += 10;
-
   if (boostsRemaining === 1) score -= 8;
   if (boostsUsed === 0) score += 6;
-
   return score;
 }
 
@@ -175,67 +216,25 @@ function getTimingMessage(level, justLost, gapToNext, momentum) {
     if (momentum >= 70) return "Täydellinen hetki vahvistaa momentumia.";
     return "Täydellinen boost-ikkuna juuri nyt.";
   }
-
   if (level === "good") {
     if (justLost) return "Hyvä hetki vastata tilanteeseen.";
     if (gapToNext <= 1) return "Hyvä hetki yrittää nousua.";
     return "Boosti voi auttaa tässä kohdassa.";
   }
-
   return "AI suosittelee odottamaan parempaa hetkeä.";
 }
 
 function getTimingMultiplier(level) {
-  if (level === "perfect") {
-    return {
-      momentumMultiplier: 1.5,
-      gapBonus: 1,
-    };
-  }
-
-  if (level === "good") {
-    return {
-      momentumMultiplier: 1.15,
-      gapBonus: 0,
-    };
-  }
-
-  return {
-    momentumMultiplier: 1,
-    gapBonus: 0,
-  };
+  if (level === "perfect") return { momentumMultiplier: 1.5, gapBonus: 1 };
+  if (level === "good") return { momentumMultiplier: 1.15, gapBonus: 0 };
+  return { momentumMultiplier: 1, gapBonus: 0 };
 }
 
 function getBoostEffect(drawType, currentGap, currentRank) {
-  if (drawType === "day") {
-    return {
-      momentumGain: 25,
-      gapReduction: currentRank > 1 ? 1 : 0,
-      visibilityBonus: 1,
-    };
-  }
-
-  if (drawType === "week") {
-    return {
-      momentumGain: 20,
-      gapReduction: currentRank > 1 && currentGap <= 2 ? 1 : 0,
-      visibilityBonus: currentGap <= 1 ? 1 : 0,
-    };
-  }
-
-  if (drawType === "month") {
-    return {
-      momentumGain: 15,
-      gapReduction: currentRank > 1 && currentGap <= 1 ? 1 : 0,
-      visibilityBonus: 1,
-    };
-  }
-
-  return {
-    momentumGain: 20,
-    gapReduction: currentRank > 1 ? 1 : 0,
-    visibilityBonus: 0,
-  };
+  if (drawType === "day") return { momentumGain: 25, gapReduction: currentRank > 1 ? 1 : 0, visibilityBonus: 1 };
+  if (drawType === "week") return { momentumGain: 20, gapReduction: currentRank > 1 && currentGap <= 2 ? 1 : 0, visibilityBonus: currentGap <= 1 ? 1 : 0 };
+  if (drawType === "month") return { momentumGain: 15, gapReduction: currentRank > 1 && currentGap <= 1 ? 1 : 0, visibilityBonus: 1 };
+  return { momentumGain: 20, gapReduction: currentRank > 1 ? 1 : 0, visibilityBonus: 0 };
 }
 
 function getBoostEffectLabel(drawType) {
@@ -250,7 +249,6 @@ function getVisibilityEffect(drawType, timing) {
   if (drawType === "day") base = 18;
   if (drawType === "week") base = 12;
   if (drawType === "month") base = 8;
-
   if (timing === "perfect") return base + 8;
   if (timing === "good") return base + 3;
   return base;
@@ -273,46 +271,54 @@ function getBaseBoostPrice(drawType, boostsUsed) {
   return nextBoost ? nextBoost.price : null;
 }
 
-function getAdaptivePrice({
-  drawType,
-  boostsUsed,
-  timing,
-  score,
-  conversionStats,
-}) {
+function getAdaptivePriceLevel3({ drawType, boostsUsed, timing, score, conversionStats, aiModel }) {
   const basePrice = getBaseBoostPrice(drawType, boostsUsed);
   if (basePrice == null) return null;
 
   let adjusted = basePrice;
-
   if (timing === "perfect") adjusted += 1;
   else if (timing === "wait") adjusted -= 1;
-
   if (score >= 75) adjusted += 1;
   else if (score < 40) adjusted -= 1;
-
-  if (drawType === "day" && timing === "perfect") adjusted += 1;
-  if (drawType === "month" && timing === "wait") adjusted -= 1;
 
   const purchaseRate = conversionStats?.purchaseRate || 0;
   if (purchaseRate >= 35) adjusted += 1;
   else if (purchaseRate <= 10) adjusted -= 1;
 
-  const minPrice = Math.max(1, basePrice - 1);
-  const maxPrice = basePrice + 2;
+  if (aiModel) {
+    if (Number(aiModel.price_sensitivity) > 0.7) adjusted -= 1;
+    if (Number(aiModel.price_sensitivity) < 0.3) adjusted += 1;
+    if (drawType === "day" && Number(aiModel.prefers_day_draws) > 0.7) adjusted += 1;
+    if (drawType === "week" && Number(aiModel.prefers_week_draws) > 0.7) adjusted += 1;
+    if (drawType === "month" && Number(aiModel.prefers_month_draws) > 0.7) adjusted += 1;
+  }
 
-  return clampPrice(adjusted, minPrice, maxPrice);
+  return clampPrice(adjusted, Math.max(1, basePrice - 1), basePrice + 2);
 }
 
-function getAIBoostDecision({
-  drawType,
-  boostsUsed,
-  justLost,
-  gapToNext,
-  momentum,
-  profile,
-  lastBoostAt,
-}) {
+function shouldShowOfferLevel3({ boostDecision, aiModel }) {
+  if (!boostDecision?.show) return false;
+  if (!aiModel) return boostDecision.show;
+
+  if (Number(aiModel.ignores_offers) > 0.8 && boostDecision.timing !== "perfect") {
+    return false;
+  }
+  if (
+    Number(aiModel.price_sensitivity) > 0.8 &&
+    (boostDecision.nextBoost?.price || 0) >= 5 &&
+    boostDecision.timing !== "perfect"
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function safeRate(num, den) {
+  if (!den || den <= 0) return 0;
+  return Math.min(100, (num / den) * 100);
+}
+
+function getAIBoostDecision({ drawType, boostsUsed, justLost, gapToNext, momentum, profile, lastBoostAt }) {
   const nextBoost = getNextBoost(drawType, boostsUsed);
 
   if (!nextBoost) {
@@ -340,12 +346,7 @@ function getAIBoostDecision({
     };
   }
 
-  if (
-    shouldSuppressBoost({
-      boostsRemaining: nextBoost.remaining,
-      ignoresOffers: profile.ignoresOffers,
-    })
-  ) {
+  if (shouldSuppressBoost({ boostsRemaining: nextBoost.remaining, ignoresOffers: profile.ignoresOffers })) {
     return {
       show: false,
       reason: "suppressed",
@@ -383,30 +384,26 @@ function getAIBoostDecision({
 
 function getSmartCTA({ rank, gapToNext, justLost, momentum, profile }) {
   if (justLost && profile.reactsToLoss > 0.4) {
-    return {
-      title: "⚠️ Sinut ohitettiin",
-      cta: "🔥 Ota paikka takaisin",
-    };
+    return { title: "⚠️ Sinut ohitettiin", cta: "🔥 Ota paikka takaisin" };
   }
-
   if (rank > 1 && gapToNext <= 1 && profile.reactsToAlmostWin > 0.4) {
-    return {
-      title: "⚡ Yksi ääni riittää",
-      cta: "🚀 Nosta sijoitusta",
-    };
+    return { title: "⚡ Yksi ääni riittää", cta: "🚀 Nosta sijoitusta" };
   }
-
   if (momentum > 50 && profile.reactsToMomentum > 0.4) {
-    return {
-      title: "🔥 Olet vauhdissa",
-      cta: "⚡ Jatka nousua",
-    };
+    return { title: "🔥 Olet vauhdissa", cta: "⚡ Jatka nousua" };
   }
+  return { title: "👍 Tilanne auki", cta: "👍 Anna ääni" };
+}
 
-  return {
-    title: "👍 Tilanne auki",
-    cta: "👍 Anna ääni",
-  };
+function getShareLink(user) {
+  return `${window.location.origin}?ref=${user.id}`;
+}
+
+function getTimeLeft(drawType) {
+  if (drawType === "day") return "päättyy tänään";
+  if (drawType === "week") return "päättyy tällä viikolla";
+  if (drawType === "month") return "päättyy tässä kuussa";
+  return "päättyy pian";
 }
 
 function cardStyle(extra = {}) {
@@ -485,14 +482,7 @@ function LoginScreen({ email, setEmail, onLogin, loading, message }) {
     >
       <div style={{ width: "100%", maxWidth: 420 }}>
         <div style={cardStyle()}>
-          <div
-            style={{
-              fontSize: 12,
-              fontWeight: 900,
-              letterSpacing: "0.18em",
-              opacity: 0.7,
-            }}
-          >
+          <div style={{ fontSize: 12, fontWeight: 900, letterSpacing: "0.18em", opacity: 0.7 }}>
             KOLEHTI
           </div>
           <h1 style={{ margin: "8px 0 0", fontSize: 38, lineHeight: 1, fontWeight: 900 }}>
@@ -518,9 +508,7 @@ function LoginScreen({ email, setEmail, onLogin, loading, message }) {
             </button>
           </div>
 
-          {message ? (
-            <div style={{ marginTop: 14, opacity: 0.85, fontSize: 14 }}>{message}</div>
-          ) : null}
+          {message ? <div style={{ marginTop: 14, opacity: 0.85, fontSize: 14 }}>{message}</div> : null}
         </div>
       </div>
     </div>
@@ -552,11 +540,16 @@ export default function App() {
   const [offerStatsLoaded, setOfferStatsLoaded] = useState(false);
   const [lastShownOfferKey, setLastShownOfferKey] = useState(null);
 
+  const [aiModel, setAiModel] = useState(null);
+  const [aiModelLoaded, setAiModelLoaded] = useState(false);
+
   const [rank, setRank] = useState(3);
   const [gap, setGap] = useState(2);
   const [momentum, setMomentum] = useState(20);
   const [lastEvent, setLastEvent] = useState(null);
   const [toast, setToast] = useState("");
+  const [voteBusy, setVoteBusy] = useState(false);
+  const [isFounder, setIsFounder] = useState(false);
 
   useEffect(() => {
     document.body.style.margin = "0";
@@ -580,79 +573,130 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    setIsFounder(isFounderEmail(user?.email));
+  }, [user?.email]);
+
+  useEffect(() => {
     if (!user?.id || !user?.email) return;
 
-    async function ensureProfileAndPost() {
-      await supabase.from("profiles").upsert({
-        id: user.id,
-        email: user.email,
-      });
-
-      const { data: existingPost } = await supabase
-        .from("posts")
-        .select("*")
-        .eq("user_id", user.id)
-        .maybeSingle();
-
-      if (!existingPost) {
-        await supabase.from("posts").insert({
-          user_id: user.id,
-          title: `${user.email.split("@")[0]}n kolehti`,
-          votes: 0,
-        });
-      }
-    }
-
-    ensureProfileAndPost();
+    ensureProfileAndPost(user).catch((err) => {
+      setToast("Postin luonti epäonnistui");
+      logAppError({ userId: user.id, area: "ensure_profile_post", message: err.message });
+    });
   }, [user?.id, user?.email]);
 
   useEffect(() => {
     if (!user?.id) return;
 
+    async function applySafeReferral() {
+      const params = new URLSearchParams(window.location.search);
+      const ref = params.get("ref");
+      if (!ref) return;
+      if (ref === user.id) return;
+
+      const { data: me } = await supabase
+        .from("profiles")
+        .select("id, referred_by")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      if (!me) return;
+      if (me.referred_by) return;
+
+      await supabase.from("profiles").update({ referred_by: ref }).eq("id", user.id);
+    }
+
+    applySafeReferral().catch((err) => {
+      logAppError({ userId: user.id, area: "referral_apply", message: err.message });
+    });
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    async function loadAiModel() {
+      try {
+        const { data: existing } = await supabase
+          .from("ai_user_models")
+          .select("*")
+          .eq("user_id", user.id)
+          .maybeSingle();
+
+        if (!existing) {
+          await supabase.from("ai_user_models").insert({ user_id: user.id });
+        }
+
+        const { data } = await supabase
+          .from("ai_user_models")
+          .select("*")
+          .eq("user_id", user.id)
+          .single();
+
+        setAiModel(data);
+      } catch (err) {
+        await logAppError({ userId: user.id, area: "load_ai_model", message: err.message });
+      } finally {
+        setAiModelLoaded(true);
+      }
+    }
+
+    loadAiModel();
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+
     async function loadPosts() {
-      const { data, error } = await supabase
-        .from("posts")
-        .select("*")
-        .order("votes", { ascending: false })
-        .order("visibility_score", { ascending: false })
-        .order("created_at", { ascending: true });
+      try {
+        const { data, error } = await supabase
+          .from("posts")
+          .select("id, user_id, title, votes, visibility_score, visibility_updated_at, created_at")
+          .order("votes", { ascending: false })
+          .order("visibility_score", { ascending: false })
+          .order("created_at", { ascending: true })
+          .limit(20);
 
-      if (error) {
+        if (error) throw error;
+
+        const rows = (data || []).map((post) => ({
+          ...post,
+          effective_visibility: decayVisibility(post.visibility_score, post.visibility_updated_at),
+        }));
+
+        setPosts(rows);
+
+        const myIndex = rows.findIndex((p) => p.user_id === user.id);
+        if (myIndex >= 0) {
+          const myRank = myIndex + 1;
+          const myVotes = rows[myIndex].votes || 0;
+          const aboveVotes = myIndex > 0 ? rows[myIndex - 1].votes || 0 : myVotes;
+          setRank(myRank);
+          setGap(myRank === 1 ? 0 : Math.max(1, aboveVotes - myVotes));
+        }
+      } catch (err) {
         setToast("Postien lataus epäonnistui");
+        await logAppError({ userId: user.id, area: "load_posts", message: err.message });
+      } finally {
         setPostsLoaded(true);
-        return;
       }
-
-      const rows = (data || []).map((post) => ({
-        ...post,
-        effective_visibility: decayVisibility(
-          post.visibility_score,
-          post.visibility_updated_at
-        ),
-      }));
-
-      setPosts(rows);
-
-      const myIndex = rows.findIndex((p) => p.user_id === user.id);
-      if (myIndex >= 0) {
-        const myRank = myIndex + 1;
-        const myVotes = rows[myIndex].votes || 0;
-        const aboveVotes = myIndex > 0 ? rows[myIndex - 1].votes || 0 : myVotes;
-        setRank(myRank);
-        setGap(myRank === 1 ? 0 : Math.max(1, aboveVotes - myVotes));
-      }
-
-      setPostsLoaded(true);
     }
 
     loadPosts();
 
     const channel = supabase
-      .channel("posts-live")
+      .channel("posts")
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "posts" },
-        () => loadPosts()
+        { event: "UPDATE", schema: "public", table: "posts" },
+        (payload) => {
+          setPosts((prev) =>
+            prev.map((p) =>
+              p.id === payload.new.id
+                ? { ...payload.new, effective_visibility: decayVisibility(payload.new.visibility_score, payload.new.visibility_updated_at) }
+                : p
+            )
+          );
+        }
       )
       .subscribe();
 
@@ -665,62 +709,55 @@ export default function App() {
     if (!user?.id) return;
 
     async function loadDrawState() {
-      let { data: draw } = await supabase
-        .from("draws")
-        .select("*")
-        .eq("type", drawType)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (!draw) {
-        const { data: newDraw, error: drawError } = await supabase
+      try {
+        let { data: draw } = await supabase
           .from("draws")
-          .insert({ type: drawType, title: drawType })
-          .select()
-          .single();
+          .select("*")
+          .eq("type", drawType)
+          .eq("is_active", true)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
 
-        if (drawError) {
-          setToast(`Arvonnan luonti epäonnistui: ${drawError.message}`);
-          setBoostLoaded(true);
-          return;
+        if (!draw) {
+          const { data: newDraw, error: drawError } = await supabase
+            .from("draws")
+            .insert({ type: drawType, title: drawType, is_active: true })
+            .select()
+            .single();
+
+          if (drawError) throw drawError;
+          draw = newDraw;
         }
 
-        draw = newDraw;
-      }
+        setDrawId(draw.id);
 
-      setDrawId(draw.id);
-
-      let { data: userDraw } = await supabase
-        .from("user_draws")
-        .select("*")
-        .eq("user_id", user.id)
-        .eq("draw_id", draw.id)
-        .maybeSingle();
-
-      if (!userDraw) {
-        const { data: newUserDraw, error: userDrawError } = await supabase
+        let { data: userDraw } = await supabase
           .from("user_draws")
-          .insert({
-            user_id: user.id,
-            draw_id: draw.id,
-            boosts_used: 0,
-          })
-          .select()
-          .single();
+          .select("*")
+          .eq("user_id", user.id)
+          .eq("draw_id", draw.id)
+          .maybeSingle();
 
-        if (userDrawError) {
-          setToast(`Boost-tilan luonti epäonnistui: ${userDrawError.message}`);
-          setBoostLoaded(true);
-          return;
+        if (!userDraw) {
+          const { data: newUserDraw, error: userDrawError } = await supabase
+            .from("user_draws")
+            .insert({ user_id: user.id, draw_id: draw.id, boosts_used: 0 })
+            .select()
+            .single();
+
+          if (userDrawError) throw userDrawError;
+          userDraw = newUserDraw;
         }
 
-        userDraw = newUserDraw;
+        setBoostsUsed(userDraw?.boosts_used || 0);
+        setLastBoostAt(userDraw?.last_boost_at || null);
+      } catch (err) {
+        setToast("Boost-tilan lataus epäonnistui");
+        await logAppError({ userId: user.id, area: "load_draw_state", message: err.message });
+      } finally {
+        setBoostLoaded(true);
       }
-
-      setBoostsUsed(userDraw?.boosts_used || 0);
-      setLastBoostAt(userDraw?.last_boost_at || null);
-      setBoostLoaded(true);
     }
 
     setBoostLoaded(false);
@@ -731,20 +768,21 @@ export default function App() {
     if (!user?.id) return;
 
     async function loadPurchases() {
-      const { data, error } = await supabase
-        .from("purchases")
-        .select("*")
-        .eq("user_id", user.id)
-        .order("created_at", { ascending: false });
+      try {
+        const { data, error } = await supabase
+          .from("purchases")
+          .select("*")
+          .eq("user_id", user.id)
+          .order("created_at", { ascending: false });
 
-      if (error) {
+        if (error) throw error;
+        setPurchases(data || []);
+      } catch (err) {
         setPurchases([]);
+        await logAppError({ userId: user.id, area: "load_purchases", message: err.message });
+      } finally {
         setPurchasesLoaded(true);
-        return;
       }
-
-      setPurchases(data || []);
-      setPurchasesLoaded(true);
     }
 
     loadPurchases();
@@ -754,20 +792,21 @@ export default function App() {
     if (!user?.id) return;
 
     async function loadOfferStats() {
-      const { data, error } = await supabase
-        .from("boost_offer_events")
-        .select("*")
-        .eq("user_id", user.id)
-        .order("created_at", { ascending: false });
+      try {
+        const { data, error } = await supabase
+          .from("boost_offer_events")
+          .select("*")
+          .eq("user_id", user.id)
+          .order("created_at", { ascending: false });
 
-      if (error) {
+        if (error) throw error;
+        setOfferStats(data || []);
+      } catch (err) {
         setOfferStats([]);
+        await logAppError({ userId: user.id, area: "load_offer_stats", message: err.message });
+      } finally {
         setOfferStatsLoaded(true);
-        return;
       }
-
-      setOfferStats(data || []);
-      setOfferStatsLoaded(true);
     }
 
     loadOfferStats();
@@ -779,6 +818,17 @@ export default function App() {
     return () => clearTimeout(t);
   }, [toast]);
 
+  const effectiveProfile = aiModel
+    ? {
+        reactsToLoss: Number(aiModel.reacts_to_loss),
+        reactsToAlmostWin: Number(aiModel.reacts_to_almost_win),
+        reactsToMomentum: Number(aiModel.reacts_to_momentum),
+        paysInCriticalMoments: Number(aiModel.pays_in_critical_moments),
+        ignoresOffers: Number(aiModel.ignores_offers),
+        preferredOffer: "BOOST",
+      }
+    : ai.profile;
+
   const smart = useMemo(
     () =>
       getSmartCTA({
@@ -786,9 +836,9 @@ export default function App() {
         gapToNext: gap,
         justLost: lastEvent === "lost",
         momentum,
-        profile: ai.profile,
+        profile: effectiveProfile,
       }),
-    [rank, gap, momentum, lastEvent, ai.profile]
+    [rank, gap, momentum, lastEvent, effectiveProfile]
   );
 
   const conversionStats = useMemo(() => {
@@ -805,7 +855,7 @@ export default function App() {
       acc[timing] = {
         shown: timingShown,
         purchased: timingPurchased,
-        conversion: timingShown ? (timingPurchased / timingShown) * 100 : 0,
+        conversion: safeRate(timingPurchased, timingShown),
       };
 
       return acc;
@@ -819,7 +869,7 @@ export default function App() {
       acc[type] = {
         shown: typeShown,
         purchased: typePurchased,
-        conversion: typeShown ? (typePurchased / typeShown) * 100 : 0,
+        conversion: safeRate(typePurchased, typeShown),
       };
 
       return acc;
@@ -830,13 +880,62 @@ export default function App() {
       clicked,
       purchased,
       ignored,
-      clickRate: shown ? (clicked / shown) * 100 : 0,
-      purchaseRate: shown ? (purchased / shown) * 100 : 0,
-      ignoreRate: shown ? (ignored / shown) * 100 : 0,
+      clickRate: safeRate(clicked, shown),
+      purchaseRate: safeRate(purchased, shown),
+      ignoreRate: safeRate(ignored, shown),
       byTiming,
       byDrawType,
     };
   }, [offerStats]);
+
+  const founderStats = useMemo(() => {
+    if (!isFounder) return null;
+
+    const purchasesCompleted = purchases.filter((p) => p.status === "completed");
+    const revenue = purchasesCompleted.reduce((sum, p) => sum + Number(p.price_eur || 0), 0);
+    const totalUsers = new Set(purchasesCompleted.map((p) => p.user_id)).size;
+
+    const shown = offerStats.filter((e) => e.action === "shown").length;
+    const clicked = offerStats.filter((e) => e.action === "clicked").length;
+    const purchased = offerStats.filter((e) => e.action === "purchased").length;
+    const ignored = offerStats.filter((e) => e.action === "ignored").length;
+
+    const avgPrice = purchasesCompleted.length > 0 ? revenue / purchasesCompleted.length : 0;
+
+    const byTiming = ["perfect", "good", "wait"].reduce((acc, t) => {
+      const rows = offerStats.filter((e) => e.timing === t);
+      const s = rows.filter((e) => e.action === "shown").length;
+      const p = rows.filter((e) => e.action === "purchased").length;
+      acc[t] = { shown: s, purchased: p, conversion: safeRate(p, s) };
+      return acc;
+    }, {});
+
+    const byDraw = ["day", "week", "month"].reduce((acc, d) => {
+      const rows = offerStats.filter((e) => e.draw_type === d);
+      const s = rows.filter((e) => e.action === "shown").length;
+      const p = rows.filter((e) => e.action === "purchased").length;
+      acc[d] = { shown: s, purchased: p, conversion: safeRate(p, s) };
+      return acc;
+    }, {});
+
+    return {
+      revenue,
+      totalUsers,
+      purchases: purchasesCompleted.length,
+      arpu: totalUsers ? revenue / totalUsers : 0,
+      avgPrice,
+      funnel: {
+        shown,
+        clicked,
+        purchased,
+        ignored,
+        clickRate: safeRate(clicked, shown),
+        purchaseRate: safeRate(purchased, shown),
+      },
+      byTiming,
+      byDraw,
+    };
+  }, [isFounder, purchases, offerStats]);
 
   const boostDecision = useMemo(() => {
     return getAIBoostDecision({
@@ -845,10 +944,14 @@ export default function App() {
       justLost: lastEvent === "lost",
       gapToNext: gap,
       momentum,
-      profile: ai.profile,
+      profile: effectiveProfile,
       lastBoostAt,
     });
-  }, [drawType, boostsUsed, lastEvent, gap, momentum, ai.profile, lastBoostAt]);
+  }, [drawType, boostsUsed, lastEvent, gap, momentum, effectiveProfile, lastBoostAt]);
+
+  const showBoostCard = useMemo(() => {
+    return shouldShowOfferLevel3({ boostDecision, aiModel });
+  }, [boostDecision, aiModel]);
 
   const cooldownLeft = useMemo(() => {
     return getRemainingCooldown(lastBoostAt, drawType);
@@ -859,25 +962,21 @@ export default function App() {
   }, [drawType, gap, rank]);
 
   const adaptivePrice = useMemo(() => {
-    return getAdaptivePrice({
+    return getAdaptivePriceLevel3({
       drawType,
       boostsUsed,
       timing: boostDecision?.timing,
       score: boostDecision?.score || 0,
       conversionStats,
+      aiModel,
     });
-  }, [
-    drawType,
-    boostsUsed,
-    boostDecision?.timing,
-    boostDecision?.score,
-    conversionStats,
-  ]);
+  }, [drawType, boostsUsed, boostDecision?.timing, boostDecision?.score, conversionStats, aiModel]);
 
   useEffect(() => {
     if (!user?.id) return;
     if (!boostDecision?.show) return;
     if (!boostDecision?.nextBoost) return;
+    if (!showBoostCard) return;
 
     const offerKey = [
       drawType,
@@ -890,21 +989,24 @@ export default function App() {
     if (lastShownOfferKey === offerKey) return;
 
     async function logShown() {
-      await supabase.from("boost_offer_events").insert({
-        user_id: user.id,
-        draw_type: drawType,
-        timing: boostDecision.timing,
-        price_eur: adaptivePrice ?? boostDecision.nextBoost.price,
-        action: "shown",
-        ai_score: Math.round(boostDecision.score),
-        meta: {
-          boosts_used: boostsUsed,
-          gap,
-          momentum,
-        },
-      });
-
-      setLastShownOfferKey(offerKey);
+      try {
+        await supabase.from("boost_offer_events").insert({
+          user_id: user.id,
+          draw_type: drawType,
+          timing: boostDecision.timing,
+          price_eur: adaptivePrice ?? boostDecision.nextBoost.price,
+          action: "shown",
+          ai_score: Math.round(boostDecision.score),
+          meta: {
+            boosts_used: boostsUsed,
+            gap,
+            momentum,
+          },
+        });
+        setLastShownOfferKey(offerKey);
+      } catch (err) {
+        await logAppError({ userId: user.id, area: "offer_shown", message: err.message });
+      }
     }
 
     logShown();
@@ -920,6 +1022,7 @@ export default function App() {
     gap,
     momentum,
     lastShownOfferKey,
+    showBoostCard,
   ]);
 
   async function login() {
@@ -931,17 +1034,21 @@ export default function App() {
     setLoginLoading(true);
     setLoginMessage("");
 
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: {
-        emailRedirectTo: window.location.origin,
-      },
-    });
+    try {
+      const { error } = await supabase.auth.signInWithOtp({
+        email,
+        options: { emailRedirectTo: window.location.origin },
+      });
 
-    if (error) setLoginMessage(`Virhe: ${error.message}`);
-    else setLoginMessage("Tarkista sähköposti");
-
-    setLoginLoading(false);
+      if (error) {
+        setLoginMessage(`Virhe: ${error.message}`);
+        await logAppError({ area: "login", message: error.message });
+      } else {
+        setLoginMessage("Tarkista sähköposti");
+      }
+    } finally {
+      setLoginLoading(false);
+    }
   }
 
   async function logout() {
@@ -950,45 +1057,81 @@ export default function App() {
   }
 
   async function vote() {
-    const myPost = posts.find((p) => p.user_id === user.id);
-    if (!myPost) {
-      setToast("Omaa kolehtia ei löytynyt");
-      return;
-    }
+    if (voteBusy) return;
+    setVoteBusy(true);
 
-    const currentVotes = myPost.votes || 0;
-    const nextVotes = currentVotes + 1;
+    try {
+      const { data: recentVotes, error: rateError } = await supabase
+        .from("vote_logs")
+        .select("id, created_at")
+        .eq("user_id", user.id)
+        .gte("created_at", new Date(Date.now() - 2000).toISOString());
 
-    const { error } = await supabase
-      .from("posts")
-      .update({ votes: nextVotes })
-      .eq("id", myPost.id)
-      .eq("user_id", user.id);
+      if (rateError) throw rateError;
+      if ((recentVotes || []).length > 0) {
+        setToast("⏳ Odota hetki ennen seuraavaa ääntä");
+        return;
+      }
 
-    if (error) {
-      setToast(`Äänestys epäonnistui: ${error.message}`);
-      return;
-    }
+      let activePost = posts.find((p) => p.user_id === user.id);
+      if (!activePost) {
+        await ensureProfileAndPost(user);
+        activePost = posts.find((p) => p.user_id === user.id);
+      }
 
-    await supabase.from("events").insert({
-      user_id: user.id,
-      type: "vote",
-      value: 1,
-      meta: { draw_type: drawType },
-    });
+      if (!activePost?.id) {
+        setToast("Omaa kolehtia ei löytynyt");
+        return;
+      }
 
-    setPosts((prev) =>
-      prev.map((post) =>
-        post.id === myPost.id ? { ...post, votes: nextVotes } : post
-      )
-    );
+      const nextVotes = (activePost.votes || 0) + 1;
 
-    setMomentum((m) => Math.min(100, m + 10));
-    setLastEvent("vote");
-    setToast("👍 Ääni annettu");
+      const { error: updateError } = await supabase
+        .from("posts")
+        .update({ votes: nextVotes })
+        .eq("id", activePost.id)
+        .eq("user_id", user.id);
 
-    if (gap <= 1) {
-      ai.learnAlmost();
+      if (updateError) throw updateError;
+
+      await supabase.from("vote_logs").insert({ user_id: user.id });
+      await supabase.from("events").insert({
+        user_id: user.id,
+        type: "vote",
+        value: 1,
+        meta: { draw_type: drawType },
+      });
+
+      setPosts((prev) => prev.map((post) => (post.id === activePost.id ? { ...post, votes: nextVotes } : post)));
+      setMomentum((m) => Math.min(100, m + 10));
+      setLastEvent("vote");
+      setToast("👍 Ääni annettu");
+
+      if (gap <= 1) ai.learnAlmost();
+
+      const { data: me } = await supabase
+        .from("profiles")
+        .select("referred_by, referral_reward_granted")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      if (me?.referred_by && !me?.referral_reward_granted) {
+        const { data: refPost } = await supabase
+          .from("posts")
+          .select("*")
+          .eq("user_id", me.referred_by)
+          .maybeSingle();
+
+        if (refPost) {
+          await supabase.from("posts").update({ votes: (refPost.votes || 0) + 1 }).eq("id", refPost.id);
+          await supabase.from("profiles").update({ referral_reward_granted: true }).eq("id", user.id);
+        }
+      }
+    } catch (err) {
+      setToast("Äänestys epäonnistui");
+      await logAppError({ userId: user?.id, area: "vote", message: err.message });
+    } finally {
+      setVoteBusy(false);
     }
   }
 
@@ -1000,9 +1143,7 @@ export default function App() {
   }
 
   async function buyBoost() {
-    const nextBoost = boostDecision.nextBoost;
-    const finalPrice = adaptivePrice ?? nextBoost?.price;
-
+    const nextBoost = boostDecision?.nextBoost;
     if (!nextBoost || !drawId) {
       setToast("🚫 Boostit käytetty tässä arvonnassa");
       return;
@@ -1010,199 +1151,109 @@ export default function App() {
 
     const remaining = getRemainingCooldown(lastBoostAt, drawType);
     if (remaining > 0) {
-      setToast(`⏳ Odota ${formatCooldown(remaining)} ennen seuraavaa boostia`);
+      setToast(`⏳ Odota ${formatCooldown(remaining)}`);
       return;
     }
 
-    await supabase.from("boost_offer_events").insert({
-      user_id: user.id,
-      draw_type: drawType,
-      timing: boostDecision.timing,
-      price_eur: finalPrice,
-      action: "clicked",
-      ai_score: Math.round(boostDecision.score),
-      meta: {
-        boosts_used: boostsUsed,
-        gap,
-        momentum,
-      },
-    });
+    try {
+      const { data: authData } = await supabase.auth.getSession();
+      const accessToken = authData?.session?.access_token;
+      if (!accessToken) {
+        setToast("Kirjaudu uudelleen");
+        return;
+      }
 
-    const nextUsed = boostsUsed + 1;
-    const baseEffect = getBoostEffect(drawType, gap, rank);
-    const timingMultiplier = boostDecision.multiplier || {
-      momentumMultiplier: 1,
-      gapBonus: 0,
-    };
-
-    const visibilityGain = getVisibilityEffect(drawType, boostDecision.timing);
-
-    const effect = {
-      ...baseEffect,
-      momentumGain: Math.round(
-        baseEffect.momentumGain * timingMultiplier.momentumMultiplier
-      ),
-      gapReduction: baseEffect.gapReduction + timingMultiplier.gapBonus,
-      visibilityGain,
-    };
-
-    const now = new Date().toISOString();
-
-    const { error: updateError } = await supabase
-      .from("user_draws")
-      .update({
-        boosts_used: nextUsed,
-        last_boost_at: now,
-      })
-      .eq("user_id", user.id)
-      .eq("draw_id", drawId);
-
-    if (updateError) {
-      setToast(`Boost epäonnistui: ${updateError.message}`);
-      return;
-    }
-
-    const myPost = posts.find((p) => p.user_id === user.id);
-    if (myPost) {
-      const currentVisibility = myPost.visibility_score || 0;
-
-      await supabase
-        .from("posts")
-        .update({
-          visibility_score: currentVisibility + effect.visibilityGain,
-          visibility_updated_at: now,
-        })
-        .eq("id", myPost.id)
-        .eq("user_id", user.id);
-
-      setPosts((prev) =>
-        prev.map((post) =>
-          post.id === myPost.id
-            ? {
-                ...post,
-                visibility_score: currentVisibility + effect.visibilityGain,
-                visibility_updated_at: now,
-                effective_visibility: currentVisibility + effect.visibilityGain,
-              }
-            : post
-        )
-      );
-    }
-
-    const { error: purchaseError } = await supabase.from("purchases").insert({
-      user_id: user.id,
-      offer_code: "BOOST",
-      price_eur: finalPrice,
-      status: "completed",
-      meta: {
-        draw_type: drawType,
-        boost_number: nextUsed,
-        ai_score: Math.round(boostDecision.score),
-        timing: boostDecision.timing,
-        effect,
-        label: getBoostEffectLabel(drawType),
-        base_price: nextBoost.price,
-        adaptive_price: finalPrice,
-        visibility_gain: effect.visibilityGain,
-      },
-    });
-
-    if (purchaseError) {
-      setToast(`Osto epäonnistui: ${purchaseError.message}`);
-      return;
-    }
-
-    await supabase.from("events").insert({
-      user_id: user.id,
-      type: "boost_purchase",
-      value: Math.round(finalPrice * 100),
-      meta: {
-        draw_type: drawType,
-        boost_number: nextUsed,
-        ai_score: Math.round(boostDecision.score),
-        timing: boostDecision.timing,
-        effect,
-        label: getBoostEffectLabel(drawType),
-        base_price: nextBoost.price,
-        adaptive_price: finalPrice,
-        visibility_gain: effect.visibilityGain,
-      },
-    });
-
-    await supabase.from("boost_offer_events").insert({
-      user_id: user.id,
-      draw_type: drawType,
-      timing: boostDecision.timing,
-      price_eur: finalPrice,
-      action: "purchased",
-      ai_score: Math.round(boostDecision.score),
-      meta: {
-        boosts_used: nextUsed,
-        gap_after: Math.max(0, gap - effect.gapReduction),
-        momentum_after: Math.min(100, momentum + effect.momentumGain),
-      },
-    });
-
-    setBoostsUsed(nextUsed);
-    setLastBoostAt(now);
-    setPurchases((prev) => [
-      {
-        id: crypto.randomUUID(),
-        user_id: user.id,
-        offer_code: "BOOST",
-        price_eur: finalPrice,
-        status: "completed",
-        created_at: now,
-        meta: {
-          draw_type: drawType,
-          boost_number: nextUsed,
-          effect,
-          label: getBoostEffectLabel(drawType),
+      const res = await fetch("/api/create-checkout-session", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
         },
-      },
-      ...prev,
-    ]);
+        body: JSON.stringify({
+          drawType,
+          drawId,
+          timing: boostDecision.timing,
+          aiScore: Math.round(boostDecision.score),
+          purchaseRate: conversionStats.purchaseRate || 0,
+        }),
+      });
 
-    setMomentum((m) => Math.min(100, m + effect.momentumGain));
-    if (effect.gapReduction > 0) {
-      setGap((g) => Math.max(0, g - effect.gapReduction));
-    }
+      const json = await res.json();
+      if (!res.ok) {
+        setToast(json.error || "Virhe checkoutissa");
+        await logAppError({ userId: user.id, area: "create_checkout", message: json.error || "checkout failed" });
+        return;
+      }
 
-    setLastEvent("purchase");
-    setToast(`🔥 ${getBoostEffectLabel(drawType)} käytetty (${finalPrice} €)`);
-    ai.learnPurchase("BOOST");
-  }
-
-  async function ignoreBoost() {
-    if (boostDecision.nextBoost) {
       await supabase.from("boost_offer_events").insert({
         user_id: user.id,
         draw_type: drawType,
-        timing: boostDecision.timing || "wait",
-        price_eur: adaptivePrice ?? boostDecision.nextBoost.price,
-        action: "ignored",
-        ai_score: Math.round(boostDecision.score || 0),
+        timing: boostDecision.timing,
+        price_eur: adaptivePrice ?? nextBoost.price,
+        action: "clicked",
+        ai_score: Math.round(boostDecision.score),
         meta: {
           boosts_used: boostsUsed,
           gap,
           momentum,
+          stripe_session_id: json.sessionId,
         },
       });
 
-      await supabase.from("events").insert({
-        user_id: user.id,
-        type: "boost_ignored",
-        value: 0,
-        meta: {
-          draw_type: drawType,
-          next_price: adaptivePrice ?? boostDecision.nextBoost.price,
-          ai_score: Math.round(boostDecision.score || 0),
-        },
-      });
+      window.location.href = json.url;
+    } catch (err) {
+      setToast("Checkout epäonnistui");
+      await logAppError({ userId: user.id, area: "buy_boost", message: err.message });
     }
+  }
 
-    setToast("👌 Boost ohitettu");
-    ai.learnIgnore();
+  async function ignoreBoost() {
+    const finalPrice = adaptivePrice ?? boostDecision.nextBoost?.price ?? 0;
+
+    try {
+      if (boostDecision.nextBoost) {
+        await supabase.from("boost_offer_events").insert({
+          user_id: user.id,
+          draw_type: drawType,
+          timing: boostDecision.timing || "wait",
+          price_eur: finalPrice,
+          action: "ignored",
+          ai_score: Math.round(boostDecision.score || 0),
+          meta: {
+            boosts_used: boostsUsed,
+            gap,
+            momentum,
+          },
+        });
+
+        await supabase.from("events").insert({
+          user_id: user.id,
+          type: "boost_ignored",
+          value: 0,
+          meta: {
+            draw_type: drawType,
+            next_price: finalPrice,
+            ai_score: Math.round(boostDecision.score || 0),
+          },
+        });
+
+        if (aiModel) {
+          const patch = {
+            ignores_offers: clamp01(Number(aiModel.ignores_offers || 0.5) + 0.05),
+            price_sensitivity: clamp01(Number(aiModel.price_sensitivity || 0.5) + (finalPrice >= 5 ? 0.04 : 0.01)),
+            updated_at: new Date().toISOString(),
+          };
+
+          await supabase.from("ai_user_models").update(patch).eq("user_id", user.id);
+          setAiModel((prev) => (prev ? { ...prev, ...patch } : prev));
+        }
+      }
+
+      setToast("👌 Boost ohitettu");
+      ai.learnIgnore();
+    } catch (err) {
+      await logAppError({ userId: user.id, area: "ignore_boost", message: err.message });
+    }
   }
 
   function resetAll() {
@@ -1212,49 +1263,25 @@ export default function App() {
     ai.resetProfile();
   }
 
-  const leaderboard = posts.slice(0, 10);
+  const leaderboard = posts.slice(0, 20);
   const myPost = posts.find((p) => p.user_id === user?.id);
   const totalSpent = purchases.reduce((sum, item) => sum + Number(item.price_eur || 0), 0);
 
   if (!authLoaded) {
     return (
-      <div style={{
-        minHeight: "100vh",
-        background: "#05070D",
-        color: "#fff",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        fontFamily: "system-ui, sans-serif",
-      }}>
+      <div style={{ minHeight: "100vh", background: "#05070D", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "system-ui, sans-serif" }}>
         Ladataan...
       </div>
     );
   }
 
   if (!user) {
-    return (
-      <LoginScreen
-        email={email}
-        setEmail={setEmail}
-        onLogin={login}
-        loading={loginLoading}
-        message={loginMessage}
-      />
-    );
+    return <LoginScreen email={email} setEmail={setEmail} onLogin={login} loading={loginLoading} message={loginMessage} />;
   }
 
-  if (!postsLoaded || !purchasesLoaded || !boostLoaded || !offerStatsLoaded) {
+  if (!postsLoaded || !purchasesLoaded || !boostLoaded || !offerStatsLoaded || !aiModelLoaded) {
     return (
-      <div style={{
-        minHeight: "100vh",
-        background: "#05070D",
-        color: "#fff",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        fontFamily: "system-ui, sans-serif",
-      }}>
+      <div style={{ minHeight: "100vh", background: "#05070D", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "system-ui, sans-serif" }}>
         Ladataan dataa...
       </div>
     );
@@ -1264,8 +1291,7 @@ export default function App() {
     <div
       style={{
         minHeight: "100vh",
-        background:
-          "radial-gradient(circle at top, rgba(99,102,241,0.16), transparent 30%), #05070D",
+        background: "radial-gradient(circle at top, rgba(99,102,241,0.16), transparent 30%), #05070D",
         color: "#fff",
         padding: 20,
         fontFamily: "system-ui, sans-serif",
@@ -1273,33 +1299,15 @@ export default function App() {
     >
       <div style={{ maxWidth: 480, margin: "0 auto" }}>
         {toast ? (
-          <div style={{
-            ...cardStyle({
-              marginBottom: 12,
-              textAlign: "center",
-              fontWeight: 800,
-              background: "rgba(17,24,39,0.92)",
-            }),
-          }}>
+          <div style={{ ...cardStyle({ marginBottom: 12, textAlign: "center", fontWeight: 800, background: "rgba(17,24,39,0.92)" }) }}>
             {toast}
           </div>
         ) : null}
 
         <div style={{ marginBottom: 16 }}>
-          <div style={{
-            fontSize: 12,
-            fontWeight: 900,
-            letterSpacing: "0.18em",
-            opacity: 0.7,
-          }}>
-            KOLEHTI
-          </div>
-          <h1 style={{ margin: "8px 0 0", fontSize: 42, lineHeight: 1, fontWeight: 900 }}>
-            Kolehti AI
-          </h1>
-          <div style={{ marginTop: 10, opacity: 0.75 }}>
-            {user.email || "Kirjautunut käyttäjä"}
-          </div>
+          <div style={{ fontSize: 12, fontWeight: 900, letterSpacing: "0.18em", opacity: 0.7 }}>KOLEHTI</div>
+          <h1 style={{ margin: "8px 0 0", fontSize: 42, lineHeight: 1, fontWeight: 900 }}>Kolehti AI</h1>
+          <div style={{ marginTop: 10, opacity: 0.75 }}>{user.email || "Kirjautunut käyttäjä"}</div>
         </div>
 
         <div style={{ ...cardStyle(), marginBottom: 12 }}>
@@ -1309,44 +1317,50 @@ export default function App() {
               <button
                 key={type}
                 onClick={() => setDrawType(type)}
-                style={{
-                  ...buttonStyle(type === drawType ? "accent" : "ghost"),
-                  padding: "12px 10px",
-                  fontSize: 14,
-                }}
+                style={{ ...buttonStyle(type === drawType ? "accent" : "ghost"), padding: "12px 10px", fontSize: 14 }}
               >
                 {type === "day" ? "Päivä" : type === "week" ? "Viikko" : "Kuukausi"}
               </button>
             ))}
           </div>
+          <div style={{ color: "#f87171", fontSize: 13, marginTop: 10 }}>⏳ {getTimeLeft(drawType)}</div>
         </div>
 
         <div style={{ ...cardStyle(), marginBottom: 12 }}>
           <div style={{ fontSize: 14, opacity: 0.75, marginBottom: 10 }}>Oma tilanne</div>
           <div style={{ fontSize: 34, fontWeight: 900 }}>Sijoitus: #{rank}</div>
           <div style={{ marginTop: 8, fontSize: 20, fontWeight: 800 }}>{smart.title}</div>
-          <div style={{ marginTop: 10, opacity: 0.82 }}>
-            Ero: {gap} · Momentum: {momentum}
-          </div>
-          <div style={{ marginTop: 10, opacity: 0.82 }}>
-            Omat äänet: {myPost?.votes ?? 0}
-          </div>
-          <div style={{ marginTop: 10, opacity: 0.82 }}>
-            Näkyvyys: {myPost?.effective_visibility ?? myPost?.visibility_score ?? 0}
-          </div>
-          <div style={{ marginTop: 10, opacity: 0.82 }}>
-            Ostot yhteensä: {totalSpent.toFixed(2)} €
+          <div style={{ marginTop: 10, opacity: 0.82 }}>Ero: {gap} · Momentum: {momentum}</div>
+          <div style={{ marginTop: 10, opacity: 0.82 }}>Omat äänet: {myPost?.votes ?? 0}</div>
+          <div style={{ marginTop: 10, opacity: 0.82 }}>Näkyvyys: {myPost?.effective_visibility ?? myPost?.visibility_score ?? 0}</div>
+          <div style={{ marginTop: 10, opacity: 0.82 }}>Ostot yhteensä: {totalSpent.toFixed(2)} €</div>
+          <div style={{ marginTop: 10 }}>
+            <button
+              onClick={() => {
+                const link = getShareLink(user);
+                navigator.clipboard.writeText(link);
+                setToast("🔗 Linkki kopioitu");
+              }}
+              style={buttonStyle("ghost")}
+            >
+              Jaa oma kolehti
+            </button>
           </div>
         </div>
 
         <div style={{ ...cardStyle(), marginBottom: 12 }}>
           <div style={{ fontSize: 14, opacity: 0.75, marginBottom: 12 }}>Päätoiminto</div>
-          <button onClick={vote} style={buttonStyle()}>
+          <button onClick={vote} style={buttonStyle()} disabled={voteBusy}>
             {smart.cta}
           </button>
+          {gap === 1 ? (
+            <div style={{ color: "#f59e0b", fontWeight: 900, marginTop: 12 }}>
+              🔥 YKSI ÄÄNI RIITTÄÄ VOITTOON
+            </div>
+          ) : null}
         </div>
 
-        {boostDecision.show ? (
+        {showBoostCard ? (
           <div
             style={{
               ...cardStyle({
@@ -1358,54 +1372,26 @@ export default function App() {
               }),
             }}
           >
-            <div style={{ fontSize: 14, fontWeight: 900, color: "#f59e0b" }}>
-              🚀 AI boost-ehdotus
-            </div>
+            <div style={{ fontSize: 14, fontWeight: 900, color: "#f59e0b" }}>🚀 AI boost-ehdotus</div>
+            <div style={{ marginTop: 8, fontSize: 20, fontWeight: 900 }}>{boostDecision.message}</div>
 
-            <div style={{ marginTop: 8, fontSize: 20, fontWeight: 900 }}>
-              {boostDecision.message}
-            </div>
-
-            <div style={{ marginTop: 10, opacity: 0.82 }}>
-              Boostit: {boostsUsed}/{getBoostConfig(drawType).limit}
-            </div>
-
-            <div style={{ marginTop: 6, opacity: 0.82 }}>
-              Seuraava boosti: {adaptivePrice} €
-            </div>
-
-            <div style={{ marginTop: 6, opacity: 0.65, fontSize: 13 }}>
-              Perushinta: {boostDecision.nextBoost?.price} €
-            </div>
-
-            <div style={{ marginTop: 6, opacity: 0.65, fontSize: 13 }}>
-              AI score: {Math.round(boostDecision.score)}
-            </div>
-
-            <div style={{ marginTop: 6, opacity: 0.82, fontSize: 13 }}>
-              Timing: {boostDecision.timing === "perfect" ? "PERFECT" : boostDecision.timing === "good" ? "GOOD" : "WAIT"}
-            </div>
-
+            <div style={{ marginTop: 10, opacity: 0.82 }}>Boostit: {boostsUsed}/{getBoostConfig(drawType).limit}</div>
+            <div style={{ marginTop: 6, opacity: 0.82 }}>Seuraava boosti: {adaptivePrice} €</div>
+            <div style={{ marginTop: 6, opacity: 0.65, fontSize: 13 }}>Perushinta: {boostDecision.nextBoost?.price} €</div>
             <div style={{ marginTop: 6, opacity: 0.72, fontSize: 13 }}>
               +{baseBoostEffect.momentumGain} momentum
               {baseBoostEffect.gapReduction > 0 ? ` · gap -${baseBoostEffect.gapReduction}` : ""}
               {boostDecision.timing ? ` · näkyvyys +${getVisibilityEffect(drawType, boostDecision.timing)}` : ""}
             </div>
-
-            <div style={{ marginTop: 6, opacity: 0.72, fontSize: 13 }}>
-              {boostDecision.timing === "perfect"
-                ? "Täysi timing-bonus aktiivinen"
-                : boostDecision.timing === "good"
-                ? "Kevyt timing-bonus aktiivinen"
-                : "Ei timing-bonusta"}
+            <div style={{ color: "#f87171", fontSize: 13, marginTop: 6 }}>
+              Vain {getBoostConfig(drawType).limit - boostsUsed} jäljellä
             </div>
-
-            {cooldownLeft > 0 && (
-              <div style={{ marginTop: 10, fontSize: 13, opacity: 0.75 }}>
-                ⏳ Seuraava boosti: {formatCooldown(cooldownLeft)}
-              </div>
-            )}
-
+            {boostDecision.timing === "perfect" ? (
+              <div style={{ color: "#f59e0b", fontWeight: 800, marginTop: 6 }}>🔥 Paras hetki juuri nyt</div>
+            ) : null}
+            {cooldownLeft > 0 ? (
+              <div style={{ marginTop: 10, fontSize: 13, opacity: 0.75 }}>⏳ Seuraava boosti: {formatCooldown(cooldownLeft)}</div>
+            ) : null}
             <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
               <button
                 onClick={buyBoost}
@@ -1418,36 +1404,39 @@ export default function App() {
               >
                 Käytä boosti ({adaptivePrice} €)
               </button>
-              <button onClick={ignoreBoost} style={buttonStyle("ghost")}>
-                Ei nyt
-              </button>
+              <button onClick={ignoreBoost} style={buttonStyle("ghost")}>Ei nyt</button>
             </div>
           </div>
         ) : (
           <div style={{ ...cardStyle(), marginBottom: 12, opacity: 0.85 }}>
             <div style={{ fontWeight: 800 }}>Boostit</div>
-            <div style={{ marginTop: 8 }}>
-              {boostsUsed}/{getBoostConfig(drawType).limit} käytetty
-            </div>
+            <div style={{ marginTop: 8 }}>{boostsUsed}/{getBoostConfig(drawType).limit} käytetty</div>
             <div style={{ marginTop: 8, fontSize: 14 }}>
-              {boostDecision.nextBoost
-                ? `Seuraava boosti: ${adaptivePrice} €`
-                : "Ei boosteja jäljellä tässä arvonnassa"}
+              {boostDecision.nextBoost ? `Seuraava boosti: ${adaptivePrice} €` : "Ei boosteja jäljellä tässä arvonnassa"}
             </div>
-            {boostDecision.nextBoost ? (
-              <div style={{ marginTop: 6, fontSize: 12, opacity: 0.6 }}>
-                Perushinta: {boostDecision.nextBoost.price} €
-              </div>
-            ) : null}
-            <div style={{ marginTop: 8, fontSize: 14 }}>
-              {boostDecision.message}
-            </div>
+            {boostDecision.nextBoost ? <div style={{ marginTop: 6, fontSize: 12, opacity: 0.6 }}>Perushinta: {boostDecision.nextBoost.price} €</div> : null}
+            <div style={{ marginTop: 8, fontSize: 14 }}>{boostDecision.message}</div>
             <div style={{ marginTop: 8, fontSize: 13, opacity: 0.72 }}>
               Seuraavan boostin vaikutus olisi: +{baseBoostEffect.momentumGain} momentum
               {baseBoostEffect.gapReduction > 0 ? ` · gap -${baseBoostEffect.gapReduction}` : ""}
             </div>
           </div>
         )}
+
+        <div style={cardStyle({ marginBottom: 12 })}>
+          <div style={{ fontWeight: 800 }}>🎁 Kutsu kaveri</div>
+          <div style={{ marginTop: 6 }}>Saat referral-edun kun uusi käyttäjä liittyy ja äänestää.</div>
+          <button
+            onClick={() => {
+              const link = getShareLink(user);
+              navigator.clipboard.writeText(link);
+              setToast("🔗 Linkki kopioitu");
+            }}
+            style={{ ...buttonStyle(), marginTop: 12 }}
+          >
+            Kopioi linkki
+          </button>
+        </div>
 
         <div style={{ ...cardStyle(), marginBottom: 12 }}>
           <div style={{ fontSize: 14, opacity: 0.75, marginBottom: 12 }}>Leaderboard</div>
@@ -1461,20 +1450,17 @@ export default function App() {
                   gap: 12,
                   padding: "10px 12px",
                   borderRadius: 12,
-                  background:
-                    post.user_id === user.id
-                      ? "rgba(99,102,241,0.18)"
-                      : "rgba(255,255,255,0.04)",
+                  background: post.user_id === user.id ? "rgba(99,102,241,0.18)" : "rgba(255,255,255,0.04)",
                 }}
               >
                 <div style={{ fontWeight: 700 }}>
                   #{index + 1} {post.title}
+                  {post.user_id === user.id ? <div style={{ color: "#f59e0b", fontSize: 12 }}>SINÄ</div> : null}
+                  {index === 0 ? <div style={{ color: "#fbbf24", fontSize: 12 }}>👑 Johtaa</div> : null}
                 </div>
                 <div style={{ textAlign: "right" }}>
                   <div style={{ opacity: 0.85 }}>{post.votes} ääntä</div>
-                  <div style={{ opacity: 0.6, fontSize: 12 }}>
-                    näkyvyys {post.effective_visibility ?? post.visibility_score ?? 0}
-                  </div>
+                  <div style={{ opacity: 0.6, fontSize: 12 }}>näkyvyys {post.effective_visibility ?? post.visibility_score ?? 0}</div>
                 </div>
               </div>
             ))}
@@ -1500,8 +1486,7 @@ export default function App() {
                   }}
                 >
                   <div style={{ fontWeight: 700 }}>
-                    {purchase.meta?.label || purchase.offer_code}{" "}
-                    {purchase.meta?.boost_number ? `#${purchase.meta.boost_number}` : ""}
+                    {purchase.meta?.label || purchase.offer_code} {purchase.meta?.boost_number ? `#${purchase.meta.boost_number}` : ""}
                   </div>
                   <div style={{ opacity: 0.85 }}>{purchase.price_eur} €</div>
                 </div>
@@ -1510,80 +1495,76 @@ export default function App() {
           </div>
         </div>
 
-        <div style={{ ...cardStyle(), marginBottom: 12 }}>
-          <div style={{ fontSize: 14, opacity: 0.75, marginBottom: 12 }}>
-            Conversion
+        {isFounder && founderStats ? (
+          <div style={{ ...cardStyle(), marginBottom: 12 }}>
+            <div style={{ fontWeight: 900, fontSize: 16 }}>📊 Founder Dashboard</div>
+            <div style={{ marginTop: 12 }}>
+              <div>💰 Revenue: {founderStats.revenue.toFixed(2)} €</div>
+              <div>🧾 Purchases: {founderStats.purchases}</div>
+              <div>👥 Paying users: {founderStats.totalUsers}</div>
+              <div>📈 ARPU: {founderStats.arpu.toFixed(2)} €</div>
+              <div>💳 Avg price: {founderStats.avgPrice.toFixed(2)} €</div>
+            </div>
+            <div style={{ marginTop: 14, fontWeight: 800 }}>Funnel</div>
+            <div style={{ fontSize: 13 }}>
+              <div>Shown: {founderStats.funnel.shown}</div>
+              <div>Clicked: {founderStats.funnel.clicked}</div>
+              <div>Purchased: {founderStats.funnel.purchased}</div>
+              <div>Ignored: {founderStats.funnel.ignored}</div>
+              <div>Click rate: {founderStats.funnel.clickRate.toFixed(1)}%</div>
+              <div>Purchase rate: {founderStats.funnel.purchaseRate.toFixed(1)}%</div>
+            </div>
+            <div style={{ marginTop: 14, fontWeight: 800 }}>Timing performance</div>
+            {Object.entries(founderStats.byTiming).map(([k, v]) => (
+              <div key={k} style={{ fontSize: 13 }}>
+                {k.toUpperCase()}: {v.purchased}/{v.shown} ({v.conversion.toFixed(1)}%)
+              </div>
+            ))}
+            <div style={{ marginTop: 14, fontWeight: 800 }}>Draw performance</div>
+            {Object.entries(founderStats.byDraw).map(([k, v]) => (
+              <div key={k} style={{ fontSize: 13 }}>
+                {k}: {v.purchased}/{v.shown} ({v.conversion.toFixed(1)}%)
+              </div>
+            ))}
           </div>
+        ) : null}
 
-          <div style={{ display: "grid", gap: 8, fontSize: 14 }}>
-            <div>Näytetty: {conversionStats.shown}</div>
-            <div>Klikattu: {conversionStats.clicked}</div>
-            <div>Ostettu: {conversionStats.purchased}</div>
-            <div>Ohitettu: {conversionStats.ignored}</div>
-            <div>Click rate: {conversionStats.clickRate.toFixed(1)}%</div>
-            <div>Purchase rate: {conversionStats.purchaseRate.toFixed(1)}%</div>
-            <div>Ignore rate: {conversionStats.ignoreRate.toFixed(1)}%</div>
-          </div>
-
-          <div style={{ marginTop: 14, fontWeight: 800 }}>Timing</div>
-          <div style={{ marginTop: 8, display: "grid", gap: 6, fontSize: 13 }}>
-            <div>
-              PERFECT: {conversionStats.byTiming.perfect?.purchased || 0}/
-              {conversionStats.byTiming.perfect?.shown || 0} ({conversionStats.byTiming.perfect?.conversion?.toFixed(1) || "0.0"}%)
-            </div>
-            <div>
-              GOOD: {conversionStats.byTiming.good?.purchased || 0}/
-              {conversionStats.byTiming.good?.shown || 0} ({conversionStats.byTiming.good?.conversion?.toFixed(1) || "0.0"}%)
-            </div>
-            <div>
-              WAIT: {conversionStats.byTiming.wait?.purchased || 0}/
-              {conversionStats.byTiming.wait?.shown || 0} ({conversionStats.byTiming.wait?.conversion?.toFixed(1) || "0.0"}%)
+        {isFounder ? (
+          <div style={{ ...cardStyle(), marginBottom: 12 }}>
+            <div style={{ fontSize: 14, opacity: 0.75, marginBottom: 12 }}>Conversion</div>
+            <div style={{ display: "grid", gap: 8, fontSize: 14 }}>
+              <div>Näytetty: {conversionStats.shown}</div>
+              <div>Klikattu: {conversionStats.clicked}</div>
+              <div>Ostettu: {conversionStats.purchased}</div>
+              <div>Ohitettu: {conversionStats.ignored}</div>
+              <div>Click rate: {conversionStats.clickRate.toFixed(1)}%</div>
+              <div>Purchase rate: {conversionStats.purchaseRate.toFixed(1)}%</div>
+              <div>Ignore rate: {conversionStats.ignoreRate.toFixed(1)}%</div>
             </div>
           </div>
-
-          <div style={{ marginTop: 14, fontWeight: 800 }}>Arvontatyypit</div>
-          <div style={{ marginTop: 8, display: "grid", gap: 6, fontSize: 13 }}>
-            <div>
-              Päivä: {conversionStats.byDrawType.day?.purchased || 0}/
-              {conversionStats.byDrawType.day?.shown || 0} ({conversionStats.byDrawType.day?.conversion?.toFixed(1) || "0.0"}%)
-            </div>
-            <div>
-              Viikko: {conversionStats.byDrawType.week?.purchased || 0}/
-              {conversionStats.byDrawType.week?.shown || 0} ({conversionStats.byDrawType.week?.conversion?.toFixed(1) || "0.0"}%)
-            </div>
-            <div>
-              Kuukausi: {conversionStats.byDrawType.month?.purchased || 0}/
-              {conversionStats.byDrawType.month?.shown || 0} ({conversionStats.byDrawType.month?.conversion?.toFixed(1) || "0.0"}%)
-            </div>
-          </div>
-        </div>
+        ) : null}
 
         <div style={{ ...cardStyle(), marginBottom: 12 }}>
           <div style={{ fontSize: 14, opacity: 0.75, marginBottom: 12 }}>Testaus</div>
           <div style={{ display: "grid", gap: 10 }}>
-            <button onClick={lose} style={buttonStyle("ghost")}>
-              Simuloi häviö
-            </button>
-            <button onClick={resetAll} style={buttonStyle("ghost")}>
-              Resetoi tila
-            </button>
-            <button onClick={logout} style={buttonStyle("ghost")}>
-              Kirjaudu ulos
-            </button>
+            <button onClick={lose} style={buttonStyle("ghost")}>Simuloi häviö</button>
+            <button onClick={resetAll} style={buttonStyle("ghost")}>Resetoi tila</button>
+            <button onClick={logout} style={buttonStyle("ghost")}>Kirjaudu ulos</button>
           </div>
         </div>
 
-        <div style={cardStyle()}>
-          <div style={{ fontSize: 14, opacity: 0.75, marginBottom: 12 }}>AI profiili</div>
-          <div style={{ display: "grid", gap: 8, fontSize: 14 }}>
-            <div>reactsToLoss: {ai.profile.reactsToLoss.toFixed(2)}</div>
-            <div>reactsToAlmostWin: {ai.profile.reactsToAlmostWin.toFixed(2)}</div>
-            <div>reactsToMomentum: {ai.profile.reactsToMomentum.toFixed(2)}</div>
-            <div>paysInCriticalMoments: {ai.profile.paysInCriticalMoments.toFixed(2)}</div>
-            <div>ignoresOffers: {ai.profile.ignoresOffers.toFixed(2)}</div>
-            <div>preferredOffer: {ai.profile.preferredOffer}</div>
+        {isFounder ? (
+          <div style={cardStyle()}>
+            <div style={{ fontSize: 14, opacity: 0.75, marginBottom: 12 }}>AI profiili</div>
+            <div style={{ display: "grid", gap: 8, fontSize: 14 }}>
+              <div>reactsToLoss: {effectiveProfile.reactsToLoss.toFixed(2)}</div>
+              <div>reactsToAlmostWin: {effectiveProfile.reactsToAlmostWin.toFixed(2)}</div>
+              <div>reactsToMomentum: {effectiveProfile.reactsToMomentum.toFixed(2)}</div>
+              <div>paysInCriticalMoments: {effectiveProfile.paysInCriticalMoments.toFixed(2)}</div>
+              <div>ignoresOffers: {effectiveProfile.ignoresOffers.toFixed(2)}</div>
+            </div>
           </div>
-        </div>
+        ) : null}
       </div>
     </div>
   );

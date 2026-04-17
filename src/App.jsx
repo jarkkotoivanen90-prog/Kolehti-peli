@@ -86,12 +86,15 @@ function getBoostConfig(drawType) {
 function getNextBoost(drawType, used) {
   const config = getBoostConfig(drawType);
 
-  if (used >= config.limit) return null;
+  if (used >= config.limit) {
+    return null;
+  }
 
   return {
     price: config.prices[used],
     remaining: config.limit - used,
     limit: config.limit,
+    used,
   };
 }
 
@@ -517,11 +520,17 @@ export default function App() {
         .maybeSingle();
 
       if (!draw) {
-        const { data: newDraw } = await supabase
+        const { data: newDraw, error: drawError } = await supabase
           .from("draws")
-          .insert({ type: drawType })
+          .insert({ type: drawType, title: drawType })
           .select()
           .single();
+
+        if (drawError) {
+          setToast(`Arvonnan luonti epäonnistui: ${drawError.message}`);
+          setBoostLoaded(true);
+          return;
+        }
 
         draw = newDraw;
       }
@@ -536,7 +545,7 @@ export default function App() {
         .maybeSingle();
 
       if (!userDraw) {
-        const { data: newUserDraw } = await supabase
+        const { data: newUserDraw, error: userDrawError } = await supabase
           .from("user_draws")
           .insert({
             user_id: user.id,
@@ -546,6 +555,12 @@ export default function App() {
           .select()
           .single();
 
+        if (userDrawError) {
+          setToast(`Boost-tilan luonti epäonnistui: ${userDrawError.message}`);
+          setBoostLoaded(true);
+          return;
+        }
+
         userDraw = newUserDraw;
       }
 
@@ -553,6 +568,7 @@ export default function App() {
       setBoostLoaded(true);
     }
 
+    setBoostLoaded(false);
     loadDrawState();
   }, [user?.id, drawType]);
 
@@ -560,11 +576,17 @@ export default function App() {
     if (!user?.id) return;
 
     async function loadPurchases() {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("purchases")
         .select("*")
         .eq("user_id", user.id)
         .order("created_at", { ascending: false });
+
+      if (error) {
+        setPurchases([]);
+        setPurchasesLoaded(true);
+        return;
+      }
 
       setPurchases(data || []);
       setPurchasesLoaded(true);
@@ -658,6 +680,9 @@ export default function App() {
       user_id: user.id,
       type: "vote",
       value: 1,
+      meta: {
+        draw_type: drawType,
+      },
     });
 
     setPosts((prev) =>
@@ -711,6 +736,7 @@ export default function App() {
       meta: {
         draw_type: drawType,
         boost_number: nextUsed,
+        ai_score: Math.round(boostDecision.score),
       },
     });
 
@@ -726,7 +752,7 @@ export default function App() {
       meta: {
         draw_type: drawType,
         boost_number: nextUsed,
-        score: Math.round(boostDecision.score),
+        ai_score: Math.round(boostDecision.score),
       },
     });
 
@@ -765,7 +791,7 @@ export default function App() {
         meta: {
           draw_type: drawType,
           next_price: boostDecision.nextBoost.price,
-          score: Math.round(boostDecision.score),
+          ai_score: Math.round(boostDecision.score),
         },
       });
     }
@@ -885,10 +911,7 @@ export default function App() {
             {["day", "week", "month"].map((type) => (
               <button
                 key={type}
-                onClick={() => {
-                  setDrawType(type);
-                  setBoostLoaded(false);
-                }}
+                onClick={() => setDrawType(type)}
                 style={{
                   ...buttonStyle(type === drawType ? "accent" : "ghost"),
                   padding: "12px 10px",

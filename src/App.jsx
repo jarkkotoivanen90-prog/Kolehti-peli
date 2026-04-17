@@ -68,27 +68,15 @@ function useKolehtiAI() {
 }
 
 function getBoostConfig(drawType) {
-  if (drawType === "day") {
-    return { limit: 2, prices: [2, 5] };
-  }
-
-  if (drawType === "week") {
-    return { limit: 4, prices: [2, 4, 7, 11] };
-  }
-
-  if (drawType === "month") {
-    return { limit: 6, prices: [2, 4, 6, 9, 13, 18] };
-  }
-
+  if (drawType === "day") return { limit: 2, prices: [2, 5] };
+  if (drawType === "week") return { limit: 4, prices: [2, 4, 7, 11] };
+  if (drawType === "month") return { limit: 6, prices: [2, 4, 6, 9, 13, 18] };
   return { limit: 2, prices: [2, 5] };
 }
 
 function getNextBoost(drawType, used) {
   const config = getBoostConfig(drawType);
-
-  if (used >= config.limit) {
-    return null;
-  }
+  if (used >= config.limit) return null;
 
   return {
     price: config.prices[used],
@@ -96,6 +84,27 @@ function getNextBoost(drawType, used) {
     limit: config.limit,
     used,
   };
+}
+
+function getBoostCooldown(drawType) {
+  if (drawType === "day") return 2 * 60 * 1000;
+  if (drawType === "week") return 10 * 60 * 1000;
+  if (drawType === "month") return 30 * 60 * 1000;
+  return 5 * 60 * 1000;
+}
+
+function getRemainingCooldown(lastBoostAt, drawType) {
+  if (!lastBoostAt) return 0;
+  const cooldown = getBoostCooldown(drawType);
+  const elapsed = Date.now() - new Date(lastBoostAt).getTime();
+  return Math.max(0, cooldown - elapsed);
+}
+
+function formatCooldown(ms) {
+  const totalSeconds = Math.ceil(ms / 1000);
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
 function scoreBoostMoment({
@@ -110,60 +119,189 @@ function scoreBoostMoment({
 
   let score = 0;
 
-  if (justLost) {
-    score += 45 + profile.reactsToLoss * 30;
-  }
+  if (justLost) score += 45 + profile.reactsToLoss * 30;
+  if (gapToNext <= 1) score += 30 + profile.reactsToAlmostWin * 25;
+  else if (gapToNext === 2) score += 12;
 
-  if (gapToNext <= 1) {
-    score += 30 + profile.reactsToAlmostWin * 25;
-  } else if (gapToNext === 2) {
-    score += 12;
-  }
+  if (momentum >= 70) score += 18 + profile.reactsToMomentum * 15;
+  else if (momentum >= 50) score += 10;
 
-  if (momentum >= 70) {
-    score += 18 + profile.reactsToMomentum * 15;
-  } else if (momentum >= 50) {
-    score += 10;
-  }
-
-  if (boostsRemaining === 1) {
-    score -= 8;
-  }
-
-  if (boostsUsed === 0) {
-    score += 6;
-  }
+  if (boostsRemaining === 1) score -= 8;
+  if (boostsUsed === 0) score += 6;
 
   return score;
-}
-
-function shouldRecommendBoost({
-  score,
-  nextBoostPrice,
-  drawType,
-  boostsRemaining,
-}) {
-  if (boostsRemaining <= 0) return false;
-
-  let threshold = 40;
-
-  if (drawType === "day") threshold = 38;
-  if (drawType === "week") threshold = 42;
-  if (drawType === "month") threshold = 46;
-
-  if (nextBoostPrice >= 10) {
-    threshold += 8;
-  } else if (nextBoostPrice >= 5) {
-    threshold += 4;
-  }
-
-  return score >= threshold;
 }
 
 function shouldSuppressBoost({ boostsRemaining, ignoresOffers }) {
   if (boostsRemaining <= 0) return true;
   if (ignoresOffers >= 0.85) return true;
   return false;
+}
+
+function getTimingLevel(score, drawType, nextBoostPrice) {
+  let goodThreshold = 40;
+  let perfectThreshold = 62;
+
+  if (drawType === "day") {
+    goodThreshold = 36;
+    perfectThreshold = 58;
+  }
+  if (drawType === "week") {
+    goodThreshold = 42;
+    perfectThreshold = 64;
+  }
+  if (drawType === "month") {
+    goodThreshold = 46;
+    perfectThreshold = 68;
+  }
+
+  if (nextBoostPrice >= 10) {
+    goodThreshold += 6;
+    perfectThreshold += 8;
+  } else if (nextBoostPrice >= 5) {
+    goodThreshold += 3;
+    perfectThreshold += 4;
+  }
+
+  if (score >= perfectThreshold) return "perfect";
+  if (score >= goodThreshold) return "good";
+  return "wait";
+}
+
+function getTimingMessage(level, justLost, gapToNext, momentum) {
+  if (level === "perfect") {
+    if (justLost) return "Täydellinen vastaiskun hetki.";
+    if (gapToNext <= 1) return "Täydellinen nousuikkuna on auki.";
+    if (momentum >= 70) return "Täydellinen hetki vahvistaa momentumia.";
+    return "Täydellinen boost-ikkuna juuri nyt.";
+  }
+
+  if (level === "good") {
+    if (justLost) return "Hyvä hetki vastata tilanteeseen.";
+    if (gapToNext <= 1) return "Hyvä hetki yrittää nousua.";
+    return "Boosti voi auttaa tässä kohdassa.";
+  }
+
+  return "AI suosittelee odottamaan parempaa hetkeä.";
+}
+
+function getTimingMultiplier(level) {
+  if (level === "perfect") {
+    return {
+      momentumMultiplier: 1.5,
+      gapBonus: 1,
+    };
+  }
+
+  if (level === "good") {
+    return {
+      momentumMultiplier: 1.15,
+      gapBonus: 0,
+    };
+  }
+
+  return {
+    momentumMultiplier: 1,
+    gapBonus: 0,
+  };
+}
+
+function getBoostEffect(drawType, currentGap, currentRank) {
+  if (drawType === "day") {
+    return {
+      momentumGain: 25,
+      gapReduction: currentRank > 1 ? 1 : 0,
+      visibilityBonus: 1,
+    };
+  }
+
+  if (drawType === "week") {
+    return {
+      momentumGain: 20,
+      gapReduction: currentRank > 1 && currentGap <= 2 ? 1 : 0,
+      visibilityBonus: currentGap <= 1 ? 1 : 0,
+    };
+  }
+
+  if (drawType === "month") {
+    return {
+      momentumGain: 15,
+      gapReduction: currentRank > 1 && currentGap <= 1 ? 1 : 0,
+      visibilityBonus: 1,
+    };
+  }
+
+  return {
+    momentumGain: 20,
+    gapReduction: currentRank > 1 ? 1 : 0,
+    visibilityBonus: 0,
+  };
+}
+
+function getBoostEffectLabel(drawType) {
+  if (drawType === "day") return "Nopea nousuboosti";
+  if (drawType === "week") return "Tasapainoinen nousuboosti";
+  if (drawType === "month") return "Pitkän pelin vahvistus";
+  return "Boosti";
+}
+
+function getVisibilityEffect(drawType, timing) {
+  let base = 0;
+  if (drawType === "day") base = 18;
+  if (drawType === "week") base = 12;
+  if (drawType === "month") base = 8;
+
+  if (timing === "perfect") return base + 8;
+  if (timing === "good") return base + 3;
+  return base;
+}
+
+function decayVisibility(score, updatedAt) {
+  if (!updatedAt) return score || 0;
+  const elapsedMs = Date.now() - new Date(updatedAt).getTime();
+  const elapsedMinutes = Math.floor(elapsedMs / (1000 * 60));
+  const decay = elapsedMinutes * 2;
+  return Math.max(0, (score || 0) - decay);
+}
+
+function clampPrice(price, min, max) {
+  return Math.max(min, Math.min(max, price));
+}
+
+function getBaseBoostPrice(drawType, boostsUsed) {
+  const nextBoost = getNextBoost(drawType, boostsUsed);
+  return nextBoost ? nextBoost.price : null;
+}
+
+function getAdaptivePrice({
+  drawType,
+  boostsUsed,
+  timing,
+  score,
+  conversionStats,
+}) {
+  const basePrice = getBaseBoostPrice(drawType, boostsUsed);
+  if (basePrice == null) return null;
+
+  let adjusted = basePrice;
+
+  if (timing === "perfect") adjusted += 1;
+  else if (timing === "wait") adjusted -= 1;
+
+  if (score >= 75) adjusted += 1;
+  else if (score < 40) adjusted -= 1;
+
+  if (drawType === "day" && timing === "perfect") adjusted += 1;
+  if (drawType === "month" && timing === "wait") adjusted -= 1;
+
+  const purchaseRate = conversionStats?.purchaseRate || 0;
+  if (purchaseRate >= 35) adjusted += 1;
+  else if (purchaseRate <= 10) adjusted -= 1;
+
+  const minPrice = Math.max(1, basePrice - 1);
+  const maxPrice = basePrice + 2;
+
+  return clampPrice(adjusted, minPrice, maxPrice);
 }
 
 function getAIBoostDecision({
@@ -173,6 +311,7 @@ function getAIBoostDecision({
   gapToNext,
   momentum,
   profile,
+  lastBoostAt,
 }) {
   const nextBoost = getNextBoost(drawType, boostsUsed);
 
@@ -181,8 +320,23 @@ function getAIBoostDecision({
       show: false,
       reason: "no_boosts_left",
       score: 0,
+      timing: "wait",
       message: "Boostit käytetty tässä arvonnassa.",
       nextBoost: null,
+      multiplier: { momentumMultiplier: 1, gapBonus: 0 },
+    };
+  }
+
+  const cooldown = getRemainingCooldown(lastBoostAt, drawType);
+  if (cooldown > 0) {
+    return {
+      show: false,
+      reason: "cooldown",
+      score: 0,
+      timing: "wait",
+      message: `Odota ${formatCooldown(cooldown)} ennen seuraavaa boostia`,
+      nextBoost,
+      multiplier: { momentumMultiplier: 1, gapBonus: 0 },
     };
   }
 
@@ -196,8 +350,10 @@ function getAIBoostDecision({
       show: false,
       reason: "suppressed",
       score: 0,
+      timing: "wait",
       message: "AI ei suosittele boostia vielä tässä hetkessä.",
       nextBoost,
+      multiplier: { momentumMultiplier: 1, gapBonus: 0 },
     };
   }
 
@@ -210,28 +366,16 @@ function getAIBoostDecision({
     profile,
   });
 
-  const show = shouldRecommendBoost({
-    score,
-    nextBoostPrice: nextBoost.price,
-    drawType,
-    boostsRemaining: nextBoost.remaining,
-  });
-
-  let message = "AI ei suosittele boostia vielä tässä hetkessä.";
-
-  if (show) {
-    if (justLost) {
-      message = "Nyt on vahva hetki käyttää boosti.";
-    } else if (gapToNext <= 1) {
-      message = "Yksi oikea liike voi nostaa sijoitusta.";
-    } else if (momentum >= 60) {
-      message = "Momentum on hyvä — boost voi vahvistaa nousua.";
-    }
-  }
+  const timing = getTimingLevel(score, drawType, nextBoost.price);
+  const show = timing === "good" || timing === "perfect";
+  const message = getTimingMessage(timing, justLost, gapToNext, momentum);
+  const multiplier = getTimingMultiplier(timing);
 
   return {
     show,
     score,
+    timing,
+    multiplier,
     nextBoost,
     message,
   };
@@ -398,10 +542,15 @@ export default function App() {
   const [drawType, setDrawType] = useState("day");
   const [drawId, setDrawId] = useState(null);
   const [boostsUsed, setBoostsUsed] = useState(0);
+  const [lastBoostAt, setLastBoostAt] = useState(null);
   const [boostLoaded, setBoostLoaded] = useState(false);
 
   const [purchases, setPurchases] = useState([]);
   const [purchasesLoaded, setPurchasesLoaded] = useState(false);
+
+  const [offerStats, setOfferStats] = useState([]);
+  const [offerStatsLoaded, setOfferStatsLoaded] = useState(false);
+  const [lastShownOfferKey, setLastShownOfferKey] = useState(null);
 
   const [rank, setRank] = useState(3);
   const [gap, setGap] = useState(2);
@@ -427,9 +576,7 @@ export default function App() {
       setAuthLoaded(true);
     });
 
-    return () => {
-      subscription.unsubscribe();
-    };
+    return () => subscription.unsubscribe();
   }, []);
 
   useEffect(() => {
@@ -467,6 +614,7 @@ export default function App() {
         .from("posts")
         .select("*")
         .order("votes", { ascending: false })
+        .order("visibility_score", { ascending: false })
         .order("created_at", { ascending: true });
 
       if (error) {
@@ -475,7 +623,14 @@ export default function App() {
         return;
       }
 
-      const rows = data || [];
+      const rows = (data || []).map((post) => ({
+        ...post,
+        effective_visibility: decayVisibility(
+          post.visibility_score,
+          post.visibility_updated_at
+        ),
+      }));
+
       setPosts(rows);
 
       const myIndex = rows.findIndex((p) => p.user_id === user.id);
@@ -483,7 +638,6 @@ export default function App() {
         const myRank = myIndex + 1;
         const myVotes = rows[myIndex].votes || 0;
         const aboveVotes = myIndex > 0 ? rows[myIndex - 1].votes || 0 : myVotes;
-
         setRank(myRank);
         setGap(myRank === 1 ? 0 : Math.max(1, aboveVotes - myVotes));
       }
@@ -565,6 +719,7 @@ export default function App() {
       }
 
       setBoostsUsed(userDraw?.boosts_used || 0);
+      setLastBoostAt(userDraw?.last_boost_at || null);
       setBoostLoaded(true);
     }
 
@@ -596,6 +751,29 @@ export default function App() {
   }, [user?.id]);
 
   useEffect(() => {
+    if (!user?.id) return;
+
+    async function loadOfferStats() {
+      const { data, error } = await supabase
+        .from("boost_offer_events")
+        .select("*")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false });
+
+      if (error) {
+        setOfferStats([]);
+        setOfferStatsLoaded(true);
+        return;
+      }
+
+      setOfferStats(data || []);
+      setOfferStatsLoaded(true);
+    }
+
+    loadOfferStats();
+  }, [user?.id]);
+
+  useEffect(() => {
     if (!toast) return;
     const t = setTimeout(() => setToast(""), 1800);
     return () => clearTimeout(t);
@@ -613,6 +791,53 @@ export default function App() {
     [rank, gap, momentum, lastEvent, ai.profile]
   );
 
+  const conversionStats = useMemo(() => {
+    const shown = offerStats.filter((e) => e.action === "shown").length;
+    const clicked = offerStats.filter((e) => e.action === "clicked").length;
+    const purchased = offerStats.filter((e) => e.action === "purchased").length;
+    const ignored = offerStats.filter((e) => e.action === "ignored").length;
+
+    const byTiming = ["perfect", "good", "wait"].reduce((acc, timing) => {
+      const timingRows = offerStats.filter((e) => e.timing === timing);
+      const timingShown = timingRows.filter((e) => e.action === "shown").length;
+      const timingPurchased = timingRows.filter((e) => e.action === "purchased").length;
+
+      acc[timing] = {
+        shown: timingShown,
+        purchased: timingPurchased,
+        conversion: timingShown ? (timingPurchased / timingShown) * 100 : 0,
+      };
+
+      return acc;
+    }, {});
+
+    const byDrawType = ["day", "week", "month"].reduce((acc, type) => {
+      const rows = offerStats.filter((e) => e.draw_type === type);
+      const typeShown = rows.filter((e) => e.action === "shown").length;
+      const typePurchased = rows.filter((e) => e.action === "purchased").length;
+
+      acc[type] = {
+        shown: typeShown,
+        purchased: typePurchased,
+        conversion: typeShown ? (typePurchased / typeShown) * 100 : 0,
+      };
+
+      return acc;
+    }, {});
+
+    return {
+      shown,
+      clicked,
+      purchased,
+      ignored,
+      clickRate: shown ? (clicked / shown) * 100 : 0,
+      purchaseRate: shown ? (purchased / shown) * 100 : 0,
+      ignoreRate: shown ? (ignored / shown) * 100 : 0,
+      byTiming,
+      byDrawType,
+    };
+  }, [offerStats]);
+
   const boostDecision = useMemo(() => {
     return getAIBoostDecision({
       drawType,
@@ -621,8 +846,81 @@ export default function App() {
       gapToNext: gap,
       momentum,
       profile: ai.profile,
+      lastBoostAt,
     });
-  }, [drawType, boostsUsed, lastEvent, gap, momentum, ai.profile]);
+  }, [drawType, boostsUsed, lastEvent, gap, momentum, ai.profile, lastBoostAt]);
+
+  const cooldownLeft = useMemo(() => {
+    return getRemainingCooldown(lastBoostAt, drawType);
+  }, [lastBoostAt, drawType]);
+
+  const baseBoostEffect = useMemo(() => {
+    return getBoostEffect(drawType, gap, rank);
+  }, [drawType, gap, rank]);
+
+  const adaptivePrice = useMemo(() => {
+    return getAdaptivePrice({
+      drawType,
+      boostsUsed,
+      timing: boostDecision?.timing,
+      score: boostDecision?.score || 0,
+      conversionStats,
+    });
+  }, [
+    drawType,
+    boostsUsed,
+    boostDecision?.timing,
+    boostDecision?.score,
+    conversionStats,
+  ]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    if (!boostDecision?.show) return;
+    if (!boostDecision?.nextBoost) return;
+
+    const offerKey = [
+      drawType,
+      boostsUsed,
+      boostDecision.timing,
+      adaptivePrice ?? boostDecision.nextBoost.price,
+      Math.round(boostDecision.score),
+    ].join(":");
+
+    if (lastShownOfferKey === offerKey) return;
+
+    async function logShown() {
+      await supabase.from("boost_offer_events").insert({
+        user_id: user.id,
+        draw_type: drawType,
+        timing: boostDecision.timing,
+        price_eur: adaptivePrice ?? boostDecision.nextBoost.price,
+        action: "shown",
+        ai_score: Math.round(boostDecision.score),
+        meta: {
+          boosts_used: boostsUsed,
+          gap,
+          momentum,
+        },
+      });
+
+      setLastShownOfferKey(offerKey);
+    }
+
+    logShown();
+  }, [
+    user?.id,
+    boostDecision?.show,
+    boostDecision?.timing,
+    boostDecision?.score,
+    boostDecision?.nextBoost?.price,
+    adaptivePrice,
+    drawType,
+    boostsUsed,
+    gap,
+    momentum,
+    lastShownOfferKey,
+  ]);
 
   async function login() {
     if (!email) {
@@ -640,11 +938,8 @@ export default function App() {
       },
     });
 
-    if (error) {
-      setLoginMessage(`Virhe: ${error.message}`);
-    } else {
-      setLoginMessage("Tarkista sähköposti");
-    }
+    if (error) setLoginMessage(`Virhe: ${error.message}`);
+    else setLoginMessage("Tarkista sähköposti");
 
     setLoginLoading(false);
   }
@@ -656,7 +951,6 @@ export default function App() {
 
   async function vote() {
     const myPost = posts.find((p) => p.user_id === user.id);
-
     if (!myPost) {
       setToast("Omaa kolehtia ei löytynyt");
       return;
@@ -680,9 +974,7 @@ export default function App() {
       user_id: user.id,
       type: "vote",
       value: 1,
-      meta: {
-        draw_type: drawType,
-      },
+      meta: { draw_type: drawType },
     });
 
     setPosts((prev) =>
@@ -709,17 +1001,59 @@ export default function App() {
 
   async function buyBoost() {
     const nextBoost = boostDecision.nextBoost;
+    const finalPrice = adaptivePrice ?? nextBoost?.price;
 
     if (!nextBoost || !drawId) {
       setToast("🚫 Boostit käytetty tässä arvonnassa");
       return;
     }
 
+    const remaining = getRemainingCooldown(lastBoostAt, drawType);
+    if (remaining > 0) {
+      setToast(`⏳ Odota ${formatCooldown(remaining)} ennen seuraavaa boostia`);
+      return;
+    }
+
+    await supabase.from("boost_offer_events").insert({
+      user_id: user.id,
+      draw_type: drawType,
+      timing: boostDecision.timing,
+      price_eur: finalPrice,
+      action: "clicked",
+      ai_score: Math.round(boostDecision.score),
+      meta: {
+        boosts_used: boostsUsed,
+        gap,
+        momentum,
+      },
+    });
+
     const nextUsed = boostsUsed + 1;
+    const baseEffect = getBoostEffect(drawType, gap, rank);
+    const timingMultiplier = boostDecision.multiplier || {
+      momentumMultiplier: 1,
+      gapBonus: 0,
+    };
+
+    const visibilityGain = getVisibilityEffect(drawType, boostDecision.timing);
+
+    const effect = {
+      ...baseEffect,
+      momentumGain: Math.round(
+        baseEffect.momentumGain * timingMultiplier.momentumMultiplier
+      ),
+      gapReduction: baseEffect.gapReduction + timingMultiplier.gapBonus,
+      visibilityGain,
+    };
+
+    const now = new Date().toISOString();
 
     const { error: updateError } = await supabase
       .from("user_draws")
-      .update({ boosts_used: nextUsed })
+      .update({
+        boosts_used: nextUsed,
+        last_boost_at: now,
+      })
       .eq("user_id", user.id)
       .eq("draw_id", drawId);
 
@@ -728,15 +1062,48 @@ export default function App() {
       return;
     }
 
+    const myPost = posts.find((p) => p.user_id === user.id);
+    if (myPost) {
+      const currentVisibility = myPost.visibility_score || 0;
+
+      await supabase
+        .from("posts")
+        .update({
+          visibility_score: currentVisibility + effect.visibilityGain,
+          visibility_updated_at: now,
+        })
+        .eq("id", myPost.id)
+        .eq("user_id", user.id);
+
+      setPosts((prev) =>
+        prev.map((post) =>
+          post.id === myPost.id
+            ? {
+                ...post,
+                visibility_score: currentVisibility + effect.visibilityGain,
+                visibility_updated_at: now,
+                effective_visibility: currentVisibility + effect.visibilityGain,
+              }
+            : post
+        )
+      );
+    }
+
     const { error: purchaseError } = await supabase.from("purchases").insert({
       user_id: user.id,
       offer_code: "BOOST",
-      price_eur: nextBoost.price,
+      price_eur: finalPrice,
       status: "completed",
       meta: {
         draw_type: drawType,
         boost_number: nextUsed,
         ai_score: Math.round(boostDecision.score),
+        timing: boostDecision.timing,
+        effect,
+        label: getBoostEffectLabel(drawType),
+        base_price: nextBoost.price,
+        adaptive_price: finalPrice,
+        visibility_gain: effect.visibilityGain,
       },
     });
 
@@ -748,50 +1115,88 @@ export default function App() {
     await supabase.from("events").insert({
       user_id: user.id,
       type: "boost_purchase",
-      value: Math.round(nextBoost.price * 100),
+      value: Math.round(finalPrice * 100),
       meta: {
         draw_type: drawType,
         boost_number: nextUsed,
         ai_score: Math.round(boostDecision.score),
+        timing: boostDecision.timing,
+        effect,
+        label: getBoostEffectLabel(drawType),
+        base_price: nextBoost.price,
+        adaptive_price: finalPrice,
+        visibility_gain: effect.visibilityGain,
+      },
+    });
+
+    await supabase.from("boost_offer_events").insert({
+      user_id: user.id,
+      draw_type: drawType,
+      timing: boostDecision.timing,
+      price_eur: finalPrice,
+      action: "purchased",
+      ai_score: Math.round(boostDecision.score),
+      meta: {
+        boosts_used: nextUsed,
+        gap_after: Math.max(0, gap - effect.gapReduction),
+        momentum_after: Math.min(100, momentum + effect.momentumGain),
       },
     });
 
     setBoostsUsed(nextUsed);
+    setLastBoostAt(now);
     setPurchases((prev) => [
       {
         id: crypto.randomUUID(),
         user_id: user.id,
         offer_code: "BOOST",
-        price_eur: nextBoost.price,
+        price_eur: finalPrice,
         status: "completed",
-        created_at: new Date().toISOString(),
+        created_at: now,
         meta: {
           draw_type: drawType,
           boost_number: nextUsed,
+          effect,
+          label: getBoostEffectLabel(drawType),
         },
       },
       ...prev,
     ]);
 
-    setMomentum((m) => Math.min(100, m + 25));
-    if (gap > 0) {
-      setGap((g) => Math.max(0, g - 1));
+    setMomentum((m) => Math.min(100, m + effect.momentumGain));
+    if (effect.gapReduction > 0) {
+      setGap((g) => Math.max(0, g - effect.gapReduction));
     }
+
     setLastEvent("purchase");
-    setToast(`🔥 Boost käytetty (${nextBoost.price} €)`);
+    setToast(`🔥 ${getBoostEffectLabel(drawType)} käytetty (${finalPrice} €)`);
     ai.learnPurchase("BOOST");
   }
 
   async function ignoreBoost() {
     if (boostDecision.nextBoost) {
+      await supabase.from("boost_offer_events").insert({
+        user_id: user.id,
+        draw_type: drawType,
+        timing: boostDecision.timing || "wait",
+        price_eur: adaptivePrice ?? boostDecision.nextBoost.price,
+        action: "ignored",
+        ai_score: Math.round(boostDecision.score || 0),
+        meta: {
+          boosts_used: boostsUsed,
+          gap,
+          momentum,
+        },
+      });
+
       await supabase.from("events").insert({
         user_id: user.id,
         type: "boost_ignored",
         value: 0,
         meta: {
           draw_type: drawType,
-          next_price: boostDecision.nextBoost.price,
-          ai_score: Math.round(boostDecision.score),
+          next_price: adaptivePrice ?? boostDecision.nextBoost.price,
+          ai_score: Math.round(boostDecision.score || 0),
         },
       });
     }
@@ -813,17 +1218,15 @@ export default function App() {
 
   if (!authLoaded) {
     return (
-      <div
-        style={{
-          minHeight: "100vh",
-          background: "#05070D",
-          color: "#fff",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontFamily: "system-ui, sans-serif",
-        }}
-      >
+      <div style={{
+        minHeight: "100vh",
+        background: "#05070D",
+        color: "#fff",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontFamily: "system-ui, sans-serif",
+      }}>
         Ladataan...
       </div>
     );
@@ -841,19 +1244,17 @@ export default function App() {
     );
   }
 
-  if (!postsLoaded || !purchasesLoaded || !boostLoaded) {
+  if (!postsLoaded || !purchasesLoaded || !boostLoaded || !offerStatsLoaded) {
     return (
-      <div
-        style={{
-          minHeight: "100vh",
-          background: "#05070D",
-          color: "#fff",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontFamily: "system-ui, sans-serif",
-        }}
-      >
+      <div style={{
+        minHeight: "100vh",
+        background: "#05070D",
+        color: "#fff",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontFamily: "system-ui, sans-serif",
+      }}>
         Ladataan dataa...
       </div>
     );
@@ -872,29 +1273,25 @@ export default function App() {
     >
       <div style={{ maxWidth: 480, margin: "0 auto" }}>
         {toast ? (
-          <div
-            style={{
-              ...cardStyle({
-                marginBottom: 12,
-                textAlign: "center",
-                fontWeight: 800,
-                background: "rgba(17,24,39,0.92)",
-              }),
-            }}
-          >
+          <div style={{
+            ...cardStyle({
+              marginBottom: 12,
+              textAlign: "center",
+              fontWeight: 800,
+              background: "rgba(17,24,39,0.92)",
+            }),
+          }}>
             {toast}
           </div>
         ) : null}
 
         <div style={{ marginBottom: 16 }}>
-          <div
-            style={{
-              fontSize: 12,
-              fontWeight: 900,
-              letterSpacing: "0.18em",
-              opacity: 0.7,
-            }}
-          >
+          <div style={{
+            fontSize: 12,
+            fontWeight: 900,
+            letterSpacing: "0.18em",
+            opacity: 0.7,
+          }}>
             KOLEHTI
           </div>
           <h1 style={{ margin: "8px 0 0", fontSize: 42, lineHeight: 1, fontWeight: 900 }}>
@@ -935,6 +1332,9 @@ export default function App() {
             Omat äänet: {myPost?.votes ?? 0}
           </div>
           <div style={{ marginTop: 10, opacity: 0.82 }}>
+            Näkyvyys: {myPost?.effective_visibility ?? myPost?.visibility_score ?? 0}
+          </div>
+          <div style={{ marginTop: 10, opacity: 0.82 }}>
             Ostot yhteensä: {totalSpent.toFixed(2)} €
           </div>
         </div>
@@ -952,7 +1352,9 @@ export default function App() {
               ...cardStyle({
                 marginBottom: 12,
                 background:
-                  "linear-gradient(135deg, rgba(245,158,11,0.12), rgba(99,102,241,0.10))",
+                  boostDecision.timing === "perfect"
+                    ? "linear-gradient(135deg, rgba(245,158,11,0.20), rgba(239,68,68,0.18))"
+                    : "linear-gradient(135deg, rgba(245,158,11,0.12), rgba(99,102,241,0.10))",
               }),
             }}
           >
@@ -969,16 +1371,52 @@ export default function App() {
             </div>
 
             <div style={{ marginTop: 6, opacity: 0.82 }}>
-              Seuraava boosti: {boostDecision.nextBoost?.price} €
+              Seuraava boosti: {adaptivePrice} €
+            </div>
+
+            <div style={{ marginTop: 6, opacity: 0.65, fontSize: 13 }}>
+              Perushinta: {boostDecision.nextBoost?.price} €
             </div>
 
             <div style={{ marginTop: 6, opacity: 0.65, fontSize: 13 }}>
               AI score: {Math.round(boostDecision.score)}
             </div>
 
+            <div style={{ marginTop: 6, opacity: 0.82, fontSize: 13 }}>
+              Timing: {boostDecision.timing === "perfect" ? "PERFECT" : boostDecision.timing === "good" ? "GOOD" : "WAIT"}
+            </div>
+
+            <div style={{ marginTop: 6, opacity: 0.72, fontSize: 13 }}>
+              +{baseBoostEffect.momentumGain} momentum
+              {baseBoostEffect.gapReduction > 0 ? ` · gap -${baseBoostEffect.gapReduction}` : ""}
+              {boostDecision.timing ? ` · näkyvyys +${getVisibilityEffect(drawType, boostDecision.timing)}` : ""}
+            </div>
+
+            <div style={{ marginTop: 6, opacity: 0.72, fontSize: 13 }}>
+              {boostDecision.timing === "perfect"
+                ? "Täysi timing-bonus aktiivinen"
+                : boostDecision.timing === "good"
+                ? "Kevyt timing-bonus aktiivinen"
+                : "Ei timing-bonusta"}
+            </div>
+
+            {cooldownLeft > 0 && (
+              <div style={{ marginTop: 10, fontSize: 13, opacity: 0.75 }}>
+                ⏳ Seuraava boosti: {formatCooldown(cooldownLeft)}
+              </div>
+            )}
+
             <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
-              <button onClick={buyBoost} style={buttonStyle("accent")}>
-                Käytä boosti ({boostDecision.nextBoost?.price} €)
+              <button
+                onClick={buyBoost}
+                disabled={cooldownLeft > 0}
+                style={{
+                  ...buttonStyle("accent"),
+                  opacity: cooldownLeft > 0 ? 0.5 : 1,
+                  cursor: cooldownLeft > 0 ? "not-allowed" : "pointer",
+                }}
+              >
+                Käytä boosti ({adaptivePrice} €)
               </button>
               <button onClick={ignoreBoost} style={buttonStyle("ghost")}>
                 Ei nyt
@@ -993,11 +1431,20 @@ export default function App() {
             </div>
             <div style={{ marginTop: 8, fontSize: 14 }}>
               {boostDecision.nextBoost
-                ? `Seuraava boosti: ${boostDecision.nextBoost.price} €`
+                ? `Seuraava boosti: ${adaptivePrice} €`
                 : "Ei boosteja jäljellä tässä arvonnassa"}
             </div>
+            {boostDecision.nextBoost ? (
+              <div style={{ marginTop: 6, fontSize: 12, opacity: 0.6 }}>
+                Perushinta: {boostDecision.nextBoost.price} €
+              </div>
+            ) : null}
             <div style={{ marginTop: 8, fontSize: 14 }}>
-              AI ei suosittele boostia vielä tässä hetkessä.
+              {boostDecision.message}
+            </div>
+            <div style={{ marginTop: 8, fontSize: 13, opacity: 0.72 }}>
+              Seuraavan boostin vaikutus olisi: +{baseBoostEffect.momentumGain} momentum
+              {baseBoostEffect.gapReduction > 0 ? ` · gap -${baseBoostEffect.gapReduction}` : ""}
             </div>
           </div>
         )}
@@ -1023,7 +1470,12 @@ export default function App() {
                 <div style={{ fontWeight: 700 }}>
                   #{index + 1} {post.title}
                 </div>
-                <div style={{ opacity: 0.85 }}>{post.votes} ääntä</div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ opacity: 0.85 }}>{post.votes} ääntä</div>
+                  <div style={{ opacity: 0.6, fontSize: 12 }}>
+                    näkyvyys {post.effective_visibility ?? post.visibility_score ?? 0}
+                  </div>
+                </div>
               </div>
             ))}
           </div>
@@ -1048,13 +1500,61 @@ export default function App() {
                   }}
                 >
                   <div style={{ fontWeight: 700 }}>
-                    {purchase.offer_code}{" "}
+                    {purchase.meta?.label || purchase.offer_code}{" "}
                     {purchase.meta?.boost_number ? `#${purchase.meta.boost_number}` : ""}
                   </div>
                   <div style={{ opacity: 0.85 }}>{purchase.price_eur} €</div>
                 </div>
               ))
             )}
+          </div>
+        </div>
+
+        <div style={{ ...cardStyle(), marginBottom: 12 }}>
+          <div style={{ fontSize: 14, opacity: 0.75, marginBottom: 12 }}>
+            Conversion
+          </div>
+
+          <div style={{ display: "grid", gap: 8, fontSize: 14 }}>
+            <div>Näytetty: {conversionStats.shown}</div>
+            <div>Klikattu: {conversionStats.clicked}</div>
+            <div>Ostettu: {conversionStats.purchased}</div>
+            <div>Ohitettu: {conversionStats.ignored}</div>
+            <div>Click rate: {conversionStats.clickRate.toFixed(1)}%</div>
+            <div>Purchase rate: {conversionStats.purchaseRate.toFixed(1)}%</div>
+            <div>Ignore rate: {conversionStats.ignoreRate.toFixed(1)}%</div>
+          </div>
+
+          <div style={{ marginTop: 14, fontWeight: 800 }}>Timing</div>
+          <div style={{ marginTop: 8, display: "grid", gap: 6, fontSize: 13 }}>
+            <div>
+              PERFECT: {conversionStats.byTiming.perfect?.purchased || 0}/
+              {conversionStats.byTiming.perfect?.shown || 0} ({conversionStats.byTiming.perfect?.conversion?.toFixed(1) || "0.0"}%)
+            </div>
+            <div>
+              GOOD: {conversionStats.byTiming.good?.purchased || 0}/
+              {conversionStats.byTiming.good?.shown || 0} ({conversionStats.byTiming.good?.conversion?.toFixed(1) || "0.0"}%)
+            </div>
+            <div>
+              WAIT: {conversionStats.byTiming.wait?.purchased || 0}/
+              {conversionStats.byTiming.wait?.shown || 0} ({conversionStats.byTiming.wait?.conversion?.toFixed(1) || "0.0"}%)
+            </div>
+          </div>
+
+          <div style={{ marginTop: 14, fontWeight: 800 }}>Arvontatyypit</div>
+          <div style={{ marginTop: 8, display: "grid", gap: 6, fontSize: 13 }}>
+            <div>
+              Päivä: {conversionStats.byDrawType.day?.purchased || 0}/
+              {conversionStats.byDrawType.day?.shown || 0} ({conversionStats.byDrawType.day?.conversion?.toFixed(1) || "0.0"}%)
+            </div>
+            <div>
+              Viikko: {conversionStats.byDrawType.week?.purchased || 0}/
+              {conversionStats.byDrawType.week?.shown || 0} ({conversionStats.byDrawType.week?.conversion?.toFixed(1) || "0.0"}%)
+            </div>
+            <div>
+              Kuukausi: {conversionStats.byDrawType.month?.purchased || 0}/
+              {conversionStats.byDrawType.month?.shown || 0} ({conversionStats.byDrawType.month?.conversion?.toFixed(1) || "0.0"}%)
+            </div>
           </div>
         </div>
 

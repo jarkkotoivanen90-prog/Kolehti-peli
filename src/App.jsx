@@ -67,6 +67,173 @@ function useKolehtiAI() {
   };
 }
 
+function getBoostConfig(drawType) {
+  if (drawType === "day") {
+    return { limit: 2, prices: [2, 5] };
+  }
+
+  if (drawType === "week") {
+    return { limit: 4, prices: [2, 4, 7, 11] };
+  }
+
+  if (drawType === "month") {
+    return { limit: 6, prices: [2, 4, 6, 9, 13, 18] };
+  }
+
+  return { limit: 2, prices: [2, 5] };
+}
+
+function getNextBoost(drawType, used) {
+  const config = getBoostConfig(drawType);
+
+  if (used >= config.limit) return null;
+
+  return {
+    price: config.prices[used],
+    remaining: config.limit - used,
+    limit: config.limit,
+  };
+}
+
+function scoreBoostMoment({
+  justLost,
+  gapToNext,
+  momentum,
+  boostsRemaining,
+  boostsUsed,
+  profile,
+}) {
+  if (boostsRemaining <= 0) return 0;
+
+  let score = 0;
+
+  if (justLost) {
+    score += 45 + profile.reactsToLoss * 30;
+  }
+
+  if (gapToNext <= 1) {
+    score += 30 + profile.reactsToAlmostWin * 25;
+  } else if (gapToNext === 2) {
+    score += 12;
+  }
+
+  if (momentum >= 70) {
+    score += 18 + profile.reactsToMomentum * 15;
+  } else if (momentum >= 50) {
+    score += 10;
+  }
+
+  if (boostsRemaining === 1) {
+    score -= 8;
+  }
+
+  if (boostsUsed === 0) {
+    score += 6;
+  }
+
+  return score;
+}
+
+function shouldRecommendBoost({
+  score,
+  nextBoostPrice,
+  drawType,
+  boostsRemaining,
+}) {
+  if (boostsRemaining <= 0) return false;
+
+  let threshold = 40;
+
+  if (drawType === "day") threshold = 38;
+  if (drawType === "week") threshold = 42;
+  if (drawType === "month") threshold = 46;
+
+  if (nextBoostPrice >= 10) {
+    threshold += 8;
+  } else if (nextBoostPrice >= 5) {
+    threshold += 4;
+  }
+
+  return score >= threshold;
+}
+
+function shouldSuppressBoost({ boostsRemaining, ignoresOffers }) {
+  if (boostsRemaining <= 0) return true;
+  if (ignoresOffers >= 0.85) return true;
+  return false;
+}
+
+function getAIBoostDecision({
+  drawType,
+  boostsUsed,
+  justLost,
+  gapToNext,
+  momentum,
+  profile,
+}) {
+  const nextBoost = getNextBoost(drawType, boostsUsed);
+
+  if (!nextBoost) {
+    return {
+      show: false,
+      reason: "no_boosts_left",
+      score: 0,
+      message: "Boostit käytetty tässä arvonnassa.",
+      nextBoost: null,
+    };
+  }
+
+  if (
+    shouldSuppressBoost({
+      boostsRemaining: nextBoost.remaining,
+      ignoresOffers: profile.ignoresOffers,
+    })
+  ) {
+    return {
+      show: false,
+      reason: "suppressed",
+      score: 0,
+      message: "AI ei suosittele boostia vielä tässä hetkessä.",
+      nextBoost,
+    };
+  }
+
+  const score = scoreBoostMoment({
+    justLost,
+    gapToNext,
+    momentum,
+    boostsRemaining: nextBoost.remaining,
+    boostsUsed,
+    profile,
+  });
+
+  const show = shouldRecommendBoost({
+    score,
+    nextBoostPrice: nextBoost.price,
+    drawType,
+    boostsRemaining: nextBoost.remaining,
+  });
+
+  let message = "AI ei suosittele boostia vielä tässä hetkessä.";
+
+  if (show) {
+    if (justLost) {
+      message = "Nyt on vahva hetki käyttää boosti.";
+    } else if (gapToNext <= 1) {
+      message = "Yksi oikea liike voi nostaa sijoitusta.";
+    } else if (momentum >= 60) {
+      message = "Momentum on hyvä — boost voi vahvistaa nousua.";
+    }
+  }
+
+  return {
+    show,
+    score,
+    nextBoost,
+    message,
+  };
+}
+
 function getSmartCTA({ rank, gapToNext, justLost, momentum, profile }) {
   if (justLost && profile.reactsToLoss > 0.4) {
     return {
@@ -93,37 +260,6 @@ function getSmartCTA({ rank, gapToNext, justLost, momentum, profile }) {
     title: "👍 Tilanne auki",
     cta: "👍 Anna ääni",
   };
-}
-
-function pickOffer({ justLost, gapToNext, momentum, profile }) {
-  if (justLost && profile.reactsToLoss > 0.45) {
-    return {
-      code: "BOOST_DOMINANCE",
-      price: 5,
-      title: "🔥 Ota paikka takaisin",
-      cta: "⚔️ Vastaa nyt",
-    };
-  }
-
-  if (gapToNext <= 1 && profile.reactsToAlmostWin > 0.45) {
-    return {
-      code: "BOOST_PUSH",
-      price: 2,
-      title: "⚡ Yksi ääni riittää",
-      cta: "🚀 Nosta sijoitusta",
-    };
-  }
-
-  if (momentum >= 60 && profile.reactsToMomentum > 0.45) {
-    return {
-      code: "BOOST_STD",
-      price: 1,
-      title: "🔥 Olet vauhdissa",
-      cta: "⚡ Jatka nousua",
-    };
-  }
-
-  return null;
 }
 
 function cardStyle(extra = {}) {
@@ -256,6 +392,11 @@ export default function App() {
   const [posts, setPosts] = useState([]);
   const [postsLoaded, setPostsLoaded] = useState(false);
 
+  const [drawType, setDrawType] = useState("day");
+  const [drawId, setDrawId] = useState(null);
+  const [boostsUsed, setBoostsUsed] = useState(0);
+  const [boostLoaded, setBoostLoaded] = useState(false);
+
   const [purchases, setPurchases] = useState([]);
   const [purchasesLoaded, setPurchasesLoaded] = useState(false);
 
@@ -366,6 +507,58 @@ export default function App() {
   useEffect(() => {
     if (!user?.id) return;
 
+    async function loadDrawState() {
+      let { data: draw } = await supabase
+        .from("draws")
+        .select("*")
+        .eq("type", drawType)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (!draw) {
+        const { data: newDraw } = await supabase
+          .from("draws")
+          .insert({ type: drawType })
+          .select()
+          .single();
+
+        draw = newDraw;
+      }
+
+      setDrawId(draw.id);
+
+      let { data: userDraw } = await supabase
+        .from("user_draws")
+        .select("*")
+        .eq("user_id", user.id)
+        .eq("draw_id", draw.id)
+        .maybeSingle();
+
+      if (!userDraw) {
+        const { data: newUserDraw } = await supabase
+          .from("user_draws")
+          .insert({
+            user_id: user.id,
+            draw_id: draw.id,
+            boosts_used: 0,
+          })
+          .select()
+          .single();
+
+        userDraw = newUserDraw;
+      }
+
+      setBoostsUsed(userDraw?.boosts_used || 0);
+      setBoostLoaded(true);
+    }
+
+    loadDrawState();
+  }, [user?.id, drawType]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+
     async function loadPurchases() {
       const { data } = await supabase
         .from("purchases")
@@ -398,16 +591,16 @@ export default function App() {
     [rank, gap, momentum, lastEvent, ai.profile]
   );
 
-  const offer = useMemo(
-    () =>
-      pickOffer({
-        justLost: lastEvent === "lost",
-        gapToNext: gap,
-        momentum,
-        profile: ai.profile,
-      }),
-    [lastEvent, gap, momentum, ai.profile]
-  );
+  const boostDecision = useMemo(() => {
+    return getAIBoostDecision({
+      drawType,
+      boostsUsed,
+      justLost: lastEvent === "lost",
+      gapToNext: gap,
+      momentum,
+      profile: ai.profile,
+    });
+  }, [drawType, boostsUsed, lastEvent, gap, momentum, ai.profile]);
 
   async function login() {
     if (!email) {
@@ -489,17 +682,35 @@ export default function App() {
     ai.learnLoss();
   }
 
-  async function buyOffer() {
-    if (!offer) return;
+  async function buyBoost() {
+    const nextBoost = boostDecision.nextBoost;
+
+    if (!nextBoost || !drawId) {
+      setToast("🚫 Boostit käytetty tässä arvonnassa");
+      return;
+    }
+
+    const nextUsed = boostsUsed + 1;
+
+    const { error: updateError } = await supabase
+      .from("user_draws")
+      .update({ boosts_used: nextUsed })
+      .eq("user_id", user.id)
+      .eq("draw_id", drawId);
+
+    if (updateError) {
+      setToast(`Boost epäonnistui: ${updateError.message}`);
+      return;
+    }
 
     const { error: purchaseError } = await supabase.from("purchases").insert({
       user_id: user.id,
-      offer_code: offer.code,
-      price_eur: offer.price,
+      offer_code: "BOOST",
+      price_eur: nextBoost.price,
       status: "completed",
       meta: {
-        title: offer.title,
-        cta: offer.cta,
+        draw_type: drawType,
+        boost_number: nextUsed,
       },
     });
 
@@ -510,46 +721,56 @@ export default function App() {
 
     await supabase.from("events").insert({
       user_id: user.id,
-      type: "purchase",
-      value: Math.round(offer.price * 100),
+      type: "boost_purchase",
+      value: Math.round(nextBoost.price * 100),
       meta: {
-        code: offer.code,
-        title: offer.title,
+        draw_type: drawType,
+        boost_number: nextUsed,
+        score: Math.round(boostDecision.score),
       },
     });
 
+    setBoostsUsed(nextUsed);
     setPurchases((prev) => [
       {
         id: crypto.randomUUID(),
         user_id: user.id,
-        offer_code: offer.code,
-        price_eur: offer.price,
+        offer_code: "BOOST",
+        price_eur: nextBoost.price,
         status: "completed",
         created_at: new Date().toISOString(),
+        meta: {
+          draw_type: drawType,
+          boost_number: nextUsed,
+        },
       },
       ...prev,
     ]);
 
-    setMomentum((m) => Math.min(100, m + 20));
+    setMomentum((m) => Math.min(100, m + 25));
+    if (gap > 0) {
+      setGap((g) => Math.max(0, g - 1));
+    }
     setLastEvent("purchase");
-    setToast(`💰 Osto tallennettu: ${offer.cta} (${offer.price} €)`);
-    ai.learnPurchase(offer.code);
+    setToast(`🔥 Boost käytetty (${nextBoost.price} €)`);
+    ai.learnPurchase("BOOST");
   }
 
-  async function ignoreOffer() {
-    if (offer) {
+  async function ignoreBoost() {
+    if (boostDecision.nextBoost) {
       await supabase.from("events").insert({
         user_id: user.id,
-        type: "offer_ignored",
+        type: "boost_ignored",
         value: 0,
         meta: {
-          code: offer.code,
-          title: offer.title,
+          draw_type: drawType,
+          next_price: boostDecision.nextBoost.price,
+          score: Math.round(boostDecision.score),
         },
       });
     }
 
-    setToast("👌 Tarjous ohitettu");
+    setToast("👌 Boost ohitettu");
     ai.learnIgnore();
   }
 
@@ -594,7 +815,7 @@ export default function App() {
     );
   }
 
-  if (!postsLoaded || !purchasesLoaded) {
+  if (!postsLoaded || !purchasesLoaded || !boostLoaded) {
     return (
       <div
         style={{
@@ -659,6 +880,28 @@ export default function App() {
         </div>
 
         <div style={{ ...cardStyle(), marginBottom: 12 }}>
+          <div style={{ fontSize: 14, opacity: 0.75, marginBottom: 10 }}>Arvonnan tyyppi</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+            {["day", "week", "month"].map((type) => (
+              <button
+                key={type}
+                onClick={() => {
+                  setDrawType(type);
+                  setBoostLoaded(false);
+                }}
+                style={{
+                  ...buttonStyle(type === drawType ? "accent" : "ghost"),
+                  padding: "12px 10px",
+                  fontSize: 14,
+                }}
+              >
+                {type === "day" ? "Päivä" : type === "week" ? "Viikko" : "Kuukausi"}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ ...cardStyle(), marginBottom: 12 }}>
           <div style={{ fontSize: 14, opacity: 0.75, marginBottom: 10 }}>Oma tilanne</div>
           <div style={{ fontSize: 34, fontWeight: 900 }}>Sijoitus: #{rank}</div>
           <div style={{ marginTop: 8, fontSize: 20, fontWeight: 800 }}>{smart.title}</div>
@@ -680,7 +923,7 @@ export default function App() {
           </button>
         </div>
 
-        {offer ? (
+        {boostDecision.show ? (
           <div
             style={{
               ...cardStyle({
@@ -690,22 +933,51 @@ export default function App() {
               }),
             }}
           >
-            <div style={{ fontSize: 14, fontWeight: 900, color: "#f59e0b" }}>🎯 AI tarjous</div>
-            <div style={{ marginTop: 8, fontSize: 22, fontWeight: 900 }}>{offer.title}</div>
-            <div style={{ marginTop: 8, opacity: 0.82 }}>
-              AI arvioi tämän parhaaksi hetkeksi juuri nyt.
+            <div style={{ fontSize: 14, fontWeight: 900, color: "#f59e0b" }}>
+              🚀 AI boost-ehdotus
             </div>
 
-            <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
-              <button onClick={buyOffer} style={buttonStyle("accent")}>
-                {offer.cta} ({offer.price} €)
+            <div style={{ marginTop: 8, fontSize: 20, fontWeight: 900 }}>
+              {boostDecision.message}
+            </div>
+
+            <div style={{ marginTop: 10, opacity: 0.82 }}>
+              Boostit: {boostsUsed}/{getBoostConfig(drawType).limit}
+            </div>
+
+            <div style={{ marginTop: 6, opacity: 0.82 }}>
+              Seuraava boosti: {boostDecision.nextBoost?.price} €
+            </div>
+
+            <div style={{ marginTop: 6, opacity: 0.65, fontSize: 13 }}>
+              AI score: {Math.round(boostDecision.score)}
+            </div>
+
+            <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
+              <button onClick={buyBoost} style={buttonStyle("accent")}>
+                Käytä boosti ({boostDecision.nextBoost?.price} €)
               </button>
-              <button onClick={ignoreOffer} style={buttonStyle("ghost")}>
+              <button onClick={ignoreBoost} style={buttonStyle("ghost")}>
                 Ei nyt
               </button>
             </div>
           </div>
-        ) : null}
+        ) : (
+          <div style={{ ...cardStyle(), marginBottom: 12, opacity: 0.85 }}>
+            <div style={{ fontWeight: 800 }}>Boostit</div>
+            <div style={{ marginTop: 8 }}>
+              {boostsUsed}/{getBoostConfig(drawType).limit} käytetty
+            </div>
+            <div style={{ marginTop: 8, fontSize: 14 }}>
+              {boostDecision.nextBoost
+                ? `Seuraava boosti: ${boostDecision.nextBoost.price} €`
+                : "Ei boosteja jäljellä tässä arvonnassa"}
+            </div>
+            <div style={{ marginTop: 8, fontSize: 14 }}>
+              AI ei suosittele boostia vielä tässä hetkessä.
+            </div>
+          </div>
+        )}
 
         <div style={{ ...cardStyle(), marginBottom: 12 }}>
           <div style={{ fontSize: 14, opacity: 0.75, marginBottom: 12 }}>Leaderboard</div>
@@ -752,7 +1024,10 @@ export default function App() {
                     background: "rgba(255,255,255,0.04)",
                   }}
                 >
-                  <div style={{ fontWeight: 700 }}>{purchase.offer_code}</div>
+                  <div style={{ fontWeight: 700 }}>
+                    {purchase.offer_code}{" "}
+                    {purchase.meta?.boost_number ? `#${purchase.meta.boost_number}` : ""}
+                  </div>
                   <div style={{ opacity: 0.85 }}>{purchase.price_eur} €</div>
                 </div>
               ))

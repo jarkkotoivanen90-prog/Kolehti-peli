@@ -49,4 +49,31 @@ export function getVisibilityDecision({
   if (score >= 35) {
     visibilityIntent = "spotlight";
     visibilityMultiplier = 1.8 * Number(economy?.visibilityMultiplier || 1);
-    visibilityMessage =
+    visibilityMessage = "Täysi näkyvyys kannattaa juuri nyt.";
+  } else if (score >= 20) {
+    visibilityIntent = "push";
+    visibilityMultiplier = 1.4 * Number(economy?.visibilityMultiplier || 1);
+    visibilityMessage = "Nyt kannattaa nostaa näkyvyyttä selvästi.";
+  } else if (score >= 10) {
+    visibilityIntent = "nudge";
+    visibilityMultiplier = 1.15 * Number(economy?.visibilityMultiplier || 1);
+    visibilityMessage = "Kevyt näkyvyyden nosto riittää tässä vaiheessa.";
+  }
+
+  trace.push({
+    label: "finalIntent",
+    value: visibilityIntent,
+    effect: 0,
+    meta: {
+      multiplier: visibilityMultiplier,
+    },
+  });
+
+  return {
+    score,
+    visibilityIntent,
+    visibilityMultiplier,
+    visibilityMessage,
+    trace,
+  };
+}

@@ -8,25 +8,19 @@ export async function saveTraceHistoryEntry({
   outputs,
   contextSnapshot,
 }) {
-  if (!userId) return;
-
-  const payload = {
-    user_id: userId,
-    decision_type: decisionType,
-    trace: trace || [],
-    inputs: {
-      ...(inputs || {}),
-      eventType,
-    },
-    outputs: outputs || {},
-    context_snapshot: contextSnapshot || {},
-  };
-
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("ai_trace_history")
-    .insert(payload);
+    .insert({
+      user_id: userId,
+      decision_type: decisionType,
+      trace: trace || [],
+      inputs: { ...(inputs || {}), eventType },
+      outputs: outputs || {},
+      context_snapshot: contextSnapshot || {},
+    })
+    .select("*")
+    .single();
 
-  if (error) {
-    console.error("Trace history insert failed:", error.message);
-  }
+  if (error) throw error;
+  return data;
 }

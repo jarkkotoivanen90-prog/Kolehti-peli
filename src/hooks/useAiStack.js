@@ -2,35 +2,31 @@ import { useMemo } from "react";
 import { runAiOrchestrator } from "../ai/orchestrator";
 
 export function useAiStack({
-  aiControlCenter,
+  aiProfile,
   aiOptimization,
   aiEconomy,
   aiPolicy,
-  aiAutopilot,
+  aiControlCenter,
   boostAnalyticsSummary,
   context,
 }) {
-  const ai = useMemo(() => {
+  return useMemo(() => {
     return runAiOrchestrator({
-      raw: {
-        controlCenter: aiControlCenter,
-        optimization: aiOptimization,
-        economy: aiEconomy,
-        policy: aiPolicy,
-        autopilot: aiAutopilot,
-        analytics: boostAnalyticsSummary,
-        context,
-      },
+      profile: aiProfile,
+      optimization: aiOptimization,
+      economy: aiEconomy,
+      policy: aiPolicy,
+      control: aiControlCenter,
+      analytics: boostAnalyticsSummary,
+      context,
     });
   }, [
-    aiControlCenter,
+    aiProfile,
     aiOptimization,
     aiEconomy,
     aiPolicy,
-    aiAutopilot,
+    aiControlCenter,
     boostAnalyticsSummary,
     context,
   ]);
-
-  return ai;
 }

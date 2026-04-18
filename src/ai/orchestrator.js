@@ -1,72 +1,45 @@
 import { getBoostDecision } from "./engines/boostEngine";
 import { getVisibilityDecision } from "./engines/visibilityEngine";
-import { getRanking } from "./engines/rankingEngine";
-import { applyPolicyLayer } from "./engines/policyEngine";
 import { getAutopilotDecision } from "./engines/autopilotEngine";
 import { getRuntimeState } from "./engines/runtimeEngine";
 
 export function runAiOrchestrator({
-  raw,
+  profile,
+  optimization,
+  economy,
+  policy,
+  control,
+  analytics,
+  context,
 }) {
-  // 1. base models
-  let {
-    controlCenter,
-    optimization,
-    economy,
-    policy,
-    autopilot,
-    analytics,
-    context,
-  } = raw;
-
-  // 2. boost
   const boost = getBoostDecision({
+    ...context,
+    profile,
     optimization,
     economy,
-    context,
   });
 
-  // 3. visibility
   const visibility = getVisibilityDecision({
+    ...context,
     economy,
-    context,
   });
 
-  // 4. ranking
-  const ranking = getRanking({
-    context,
-    visibility,
+  const autopilot = getAutopilotDecision({
+    summary: analytics,
+    controlMode: control.mode,
   });
 
-  // 5. autopilot
-  const autopilotDecision = getAutopilotDecision({
-    analytics,
-    controlCenter,
-  });
-
-  // 6. policy clamp
-  const safeModels = applyPolicyLayer({
+  const runtime = getRuntimeState({
+    summary: analytics,
     optimization,
     economy,
-    policy,
-    autopilot: autopilotDecision,
-  });
-
-  // 7. runtime monitor
-  const runtime = getRuntimeState({
-    analytics,
-    models: safeModels,
-    controlCenter,
+    controlMode: control.mode,
   });
 
   return {
-    decisions: {
-      boost,
-      visibility,
-      ranking,
-    },
-    models: safeModels,
-    autopilot: autopilotDecision,
+    boost,
+    visibility,
+    autopilot,
     runtime,
   };
 }

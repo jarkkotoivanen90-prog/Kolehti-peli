@@ -1,17 +1,23 @@
-export default function FounderDashboard({ ai }) {
+export default function FounderDashboard({ ai, profile, releaseMode, onSafe }) {
   return (
-    <div>
-      <h2>AI Runtime</h2>
+    <div className="p-5 rounded-2xl bg-black/30 text-white">
+      <h2 className="text-xl font-bold mb-4">Founder Dashboard</h2>
 
       <div>Health: {ai.runtime.health}</div>
-      <div>Recommended action: {ai.runtime.recommendedAction}</div>
+      <div>Ignore: {ai.runtime.ignoreRate.toFixed(1)}%</div>
+      <div>Purchase: {ai.runtime.purchaseRate.toFixed(1)}%</div>
 
-      <h3>Boost</h3>
-      <div>Score: {ai.decisions.boost.score}</div>
-      <div>Urgency: {ai.decisions.boost.urgency}</div>
+      <div className="mt-4">
+        Boost urgency: {ai.boost.urgency}
+      </div>
 
-      <h3>Autopilot</h3>
-      <div>Mode: {ai.autopilot.recommendedMode}</div>
+      <div className="mt-4">
+        Autopilot: {ai.autopilot.recommendedMode}
+      </div>
+
+      <button onClick={onSafe} className="mt-4 bg-orange-400 px-4 py-2">
+        Safe mode
+      </button>
     </div>
   );
 }

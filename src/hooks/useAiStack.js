@@ -1,32 +1,26 @@
-import { useMemo } from "react";
-import { runAiOrchestrator } from "../ai/orchestrator";
+import { runBoostEngine } from "../ai/engines/boostEngine";
+import { runVisibilityEngine } from "../ai/engines/visibilityEngine";
+import { runAutopilotEngine } from "../ai/engines/autopilotEngine";
+import { runRuntimeEngine } from "../ai/engines/runtimeEngine";
+import { applyPolicy } from "../ai/policy/policyEngine";
 
 export function useAiStack({
-  aiProfile,
+  inputs,
   aiOptimization,
   aiEconomy,
-  aiControlCenter,
-  boostAnalyticsSummary,
-  context,
-  helpers,
+  aiPolicy,
 }) {
-  return useMemo(() => {
-    return runAiOrchestrator({
-      profile: aiProfile,
-      optimization: aiOptimization,
-      economy: aiEconomy,
-      control: aiControlCenter,
-      analytics: boostAnalyticsSummary,
-      context,
-      helpers,
-    });
-  }, [
-    aiProfile,
-    aiOptimization,
-    aiEconomy,
-    aiControlCenter,
-    boostAnalyticsSummary,
-    context,
-    helpers,
-  ]);
+  const boost = runBoostEngine(inputs, aiOptimization);
+  const visibility = runVisibilityEngine(inputs, aiEconomy);
+  const autopilot = runAutopilotEngine(inputs, aiOptimization);
+  const runtime = runRuntimeEngine(inputs);
+
+  const result = {
+    ...boost,
+    ...visibility,
+    ...autopilot,
+    ...runtime,
+  };
+
+  return applyPolicy(result, aiPolicy);
 }

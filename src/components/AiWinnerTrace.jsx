@@ -1,5 +1,22 @@
 import React from "react";
+function LabelChip({ label }) {
+  const colorMap = {
+    success: "bg-emerald-400/20 text-emerald-300",
+    problem: "bg-red-400/20 text-red-300",
+    insight: "bg-blue-400/20 text-blue-300",
+    neutral: "bg-white/10 text-white/60",
+  };
 
+  return (
+    <span
+      className={`rounded-full px-3 py-1 text-xs font-bold ${
+        colorMap[label.type] || colorMap.neutral
+      }`}
+    >
+      {label.text}
+    </span>
+  );
+}
 function TraceMiniCard({ row, color = "white", onReplay }) {
   const meta = row?.winnerMeta || {};
   const borderClass =

@@ -7,13 +7,6 @@ const DRAW_TYPES = [
   { key: "month", label: "Kuukausi", title: "kuukausiarvonta" },
 ];
 
-function getDrawTypeLabel(type) {
-  if (type === "day") return "Päivä";
-  if (type === "week") return "Viikko";
-  if (type === "month") return "Kuukausi";
-  return type || "-";
-}
-
 function euro(amount) {
   const value = Number(amount || 0);
   return `${value.toFixed(2)} €`;
@@ -22,21 +15,16 @@ function euro(amount) {
 export default function App() {
   const [session, setSession] = useState(null);
   const [user, setUser] = useState(null);
-
   const [email, setEmail] = useState("");
   const [loadingAuth, setLoadingAuth] = useState(true);
   const [sendingLink, setSendingLink] = useState(false);
-
   const [selectedType, setSelectedType] = useState("week");
-
   const [topError, setTopError] = useState("");
   const [infoMessage, setInfoMessage] = useState("");
-
   const [currentDraw, setCurrentDraw] = useState(null);
   const [myPost, setMyPost] = useState(null);
   const [leaderboard, setLeaderboard] = useState([]);
   const [recentPurchases, setRecentPurchases] = useState([]);
-
   const [loadingData, setLoadingData] = useState(false);
   const [voting, setVoting] = useState(false);
 
@@ -53,7 +41,6 @@ export default function App() {
       } = await supabase.auth.getSession();
 
       if (!mounted) return;
-
       setSession(session);
       setUser(session?.user ?? null);
       setEmail(session?.user?.email ?? "");
@@ -80,7 +67,6 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
     loadAll();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, selectedType]);
 
   async function sendMagicLink(e) {
@@ -95,15 +81,11 @@ export default function App() {
 
     try {
       setSendingLink(true);
-
-      const redirectTo =
-        import.meta.env.VITE_APP_URL || window.location.origin;
+      const redirectTo = import.meta.env.VITE_APP_URL || window.location.origin;
 
       const { error } = await supabase.auth.signInWithOtp({
         email: email.trim(),
-        options: {
-          emailRedirectTo: redirectTo,
-        },
+        options: { emailRedirectTo: redirectTo },
       });
 
       if (error) {
@@ -192,9 +174,7 @@ export default function App() {
       throw new Error(`Oman kolehdin haku epäonnistui: ${existingError.message}`);
     }
 
-    if (existing) {
-      return existing;
-    }
+    if (existing) return existing;
 
     const defaultTitle = `${user.email || "käyttäjä"}n kolehti`;
 
@@ -246,11 +226,7 @@ export default function App() {
 
     if (error) {
       const msg = error.message || "";
-      if (
-        msg.includes("relation") ||
-        msg.includes("does not exist") ||
-        msg.includes("schema cache")
-      ) {
+      if (msg.includes("relation") || msg.includes("does not exist") || msg.includes("schema cache")) {
         setRecentPurchases([]);
         return;
       }
@@ -314,13 +290,7 @@ export default function App() {
   const gap = getGapToLeader();
 
   if (loadingAuth) {
-    return (
-      <div style={styles.page}>
-        <div style={styles.centerWrap}>
-          <div style={styles.card}>Ladataan...</div>
-        </div>
-      </div>
-    );
+    return <div style={styles.page}><div style={styles.centerWrap}><div style={styles.card}>Ladataan...</div></div></div>;
   }
 
   if (!user) {
@@ -331,7 +301,6 @@ export default function App() {
             <div style={styles.logo}>KOLEHTI</div>
             <h1 style={styles.title}>Kirjaudu sisään</h1>
             <p style={styles.subtitle}>Saat sähköpostiisi kirjautumislinkin.</p>
-
             <input
               style={styles.input}
               type="email"
@@ -339,11 +308,9 @@ export default function App() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
             />
-
             <button type="submit" style={styles.primaryButton} disabled={sendingLink}>
               {sendingLink ? "Lähetetään..." : "Lähetä kirjautumislinkki"}
             </button>
-
             {topError ? <div style={styles.errorText}>{topError}</div> : null}
             {infoMessage ? <div style={styles.infoText}>{infoMessage}</div> : null}
           </form>
@@ -369,10 +336,7 @@ export default function App() {
               <button
                 key={draw.key}
                 onClick={() => setSelectedType(draw.key)}
-                style={{
-                  ...styles.tabButton,
-                  ...(selectedType === draw.key ? styles.tabButtonActive : {}),
-                }}
+                style={{ ...styles.tabButton, ...(selectedType === draw.key ? styles.tabButtonActive : {}) }}
               >
                 {draw.label}
               </button>
@@ -392,26 +356,18 @@ export default function App() {
 
         <div style={styles.card}>
           <div style={styles.cardLabel}>Päätoiminto</div>
-          <button
-            onClick={handleVote}
-            style={styles.primaryButton}
-            disabled={!myPost || voting || loadingData}
-          >
+          <button onClick={handleVote} style={styles.primaryButton} disabled={!myPost || voting || loadingData}>
             {voting ? "Tallennetaan..." : "👍 Anna ääni"}
           </button>
         </div>
 
         <div style={styles.card}>
-          <div style={styles.cardLabel}>Boostit</div>
-          <div style={styles.statLine}>
-            {selectedType === "day" ? "0/2 käytetty" : selectedType === "week" ? "0/4 käytetty" : "0/6 käytetty"}
-          </div>
+          <div style={styles.cardLabel}>AI boost-ehdotus</div>
+          <div style={styles.statLine}>{selectedType === "day" ? "0/2 käytetty" : selectedType === "week" ? "0/4 käytetty" : "0/6 käytetty"}</div>
           <div style={styles.smallMuted}>Seuraava boosti: 1 €</div>
           <div style={styles.smallMuted}>Perushinta: 2 €</div>
           <div style={styles.smallMuted}>AI suosittelee odottamaan parempaa hetkeä.</div>
-          <div style={styles.smallMuted}>
-            Seuraavan boostin vaikutus olisi: +20 momentum · gap -1
-          </div>
+          <div style={styles.smallMuted}>Seuraavan boostin vaikutus olisi: +20 momentum · gap -1</div>
         </div>
 
         <div style={styles.card}>
@@ -422,12 +378,8 @@ export default function App() {
             <div style={styles.list}>
               {leaderboard.map((item, index) => (
                 <div key={item.id} style={styles.listItem}>
-                  <div>
-                    <strong>#{index + 1} {item.title || "kolehti"}</strong>
-                  </div>
-                  <div style={styles.listMeta}>
-                    {item.votes || 0} ääntä
-                  </div>
+                  <div><strong>#{index + 1} {item.title || "kolehti"}</strong></div>
+                  <div style={styles.listMeta}>{item.votes || 0} ääntä</div>
                 </div>
               ))}
             </div>
@@ -452,21 +404,13 @@ export default function App() {
 
         <div style={styles.card}>
           <div style={styles.cardLabel}>Testaus</div>
-          <button style={styles.secondaryButton} onClick={loadAll}>
-            Päivitä tila
-          </button>
-          <button style={styles.secondaryButton} onClick={signOut}>
-            Kirjaudu ulos
-          </button>
+          <button style={styles.secondaryButton} onClick={loadAll}>Päivitä tila</button>
+          <button style={styles.secondaryButton} onClick={signOut}>Kirjaudu ulos</button>
         </div>
 
         <div style={styles.footerSpace}>
-          <div style={styles.smallMuted}>
-            Aktiivinen arvonta: {selectedDrawMeta.label} ({selectedType})
-          </div>
-          <div style={styles.smallMuted}>
-            Draw ID: {currentDraw?.id || "-"}
-          </div>
+          <div style={styles.smallMuted}>Aktiivinen arvonta: {selectedDrawMeta.label} ({selectedType})</div>
+          <div style={styles.smallMuted}>Draw ID: {currentDraw?.id || "-"}</div>
         </div>
       </div>
     </div>
@@ -476,11 +420,9 @@ export default function App() {
 const styles = {
   page: {
     minHeight: "100vh",
-    background:
-      "radial-gradient(circle at top, rgba(31,45,120,0.45), rgba(4,6,18,1) 40%)",
+    background: "radial-gradient(circle at top, rgba(31,45,120,0.45), rgba(4,6,18,1) 40%)",
     color: "#fff",
-    fontFamily:
-      'Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+    fontFamily: 'Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   },
   centerWrap: {
     minHeight: "100vh",

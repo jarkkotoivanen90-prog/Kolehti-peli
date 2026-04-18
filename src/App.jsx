@@ -1,61 +1,164 @@
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { RefreshCw, LogOut, Target, Eye, TrendingUp, Coins } from "lucide-react";
+
 import { supabase } from "./supabase";
+import { useAiStack } from "./hooks/useAiStack";
+
+import FounderDashboard from "./components/FounderDashboard";
+import AiDebugPanel from "./components/AiDebugPanel";
+import AiTraceHistory from "./components/AiTraceHistory";
+
+import { summarizeBoostAnalytics } from "./ai/analytics/analyticsEngine";
+import { buildEffectiveControl } from "./ai/control/controlEngine";
+import { applyPolicyLayer } from "./ai/policy/policyEngine";
+import { getRankingScore } from "./ai/ranking/rankingEngine";
+import { getAiState } from "./ai/state/aiState";
+import { buildLearningLoop } from "./ai/founder/learningLoop";
+import { saveTraceHistoryEntry } from "./ai/founder/traceLogger";
 
 const DRAW_TYPES = [
-  { key: "day", label: "Päivä", title: "päiväarvonta" },
-  { key: "week", label: "Viikko", title: "viikkoarvonta" },
-  { key: "month", label: "Kuukausi", title: "kuukausiarvonta" },
+  { key: "day", label: "Päivä", boostLimit: 2 },
+  { key: "week", label: "Viikko", boostLimit: 4 },
+  { key: "month", label: "Kuukausi", boostLimit: 6 },
 ];
 
-function euro(amount) {
-  const value = Number(amount || 0);
-  return `${value.toFixed(2)} €`;
+const FOUNDER_EMAILS = ["jarkko.toivanen90@gmail.com"];
+
+const DEFAULT_AI_PROFILE = {
+  reactsToLoss: 0.5,
+  reactsToAlmostWin: 0.5,
+  reactsToMomentum: 0.5,
+  paysInCriticalMoments: 0.5,
+  ignoresOffers: 0.5,
+};
+
+const DEFAULT_AI_OPTIMIZATION = {
+  aggressiveness: 0.5,
+  priceBias: 0,
+  highThreshold: 65,
+  mediumThreshold: 42,
+  softThreshold: 25,
+};
+
+const DEFAULT_AI_ECONOMY = {
+  priceModifier: 0,
+  boostStrengthMultiplier: 1,
+  visibilityMultiplier: 1,
+  urgencyBias: 0,
+  fairnessGuard: 1,
+};
+
+const DEFAULT_AI_POLICY = {
+  minPriceModifier: -2,
+  maxPriceModifier: 2,
+  maxBoostStrengthMultiplier: 1.5,
+  maxVisibilityMultiplier: 1.5,
+  maxAggressiveness: 0.85,
+  allowGrowthMode: true,
+  allowAutopilotApply: false,
+  fairnessFloor: 0.8,
+  notes: "",
+};
+
+const DEFAULT_AI_CONTROL = {
+  automationEnabled: true,
+  mode: "balanced",
+  globalAggressivenessOverride: 0,
+  globalPriceBiasOverride: 0,
+  globalVisibilityBiasOverride: 0,
+  notes: "",
+};
+
+const DEFAULT_AI_AUTOPILOT = {
+  enabled: true,
+  recommendedMode: "balanced",
+  automationAction: "hold",
+  autopilotReason: "",
+  autopilotConfidence: 0.5,
+  lastAppliedAt: null,
+};
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function euro(value) {
+  return `${Number(value || 0).toFixed(2)} €`;
+}
+
+function getBoostPrice(usedCount = 0) {
+  const prices = [1, 2, 4, 7, 11, 16];
+  return prices[Math.min(usedCount, prices.length - 1)];
+}
+
+function trackLocalEvent(events, action, payload = {}) {
+  return [
+    {
+      id: crypto.randomUUID(),
+      action,
+      created_at: new Date().toISOString(),
+      ...payload,
+    },
+    ...events,
+  ].slice(0, 100);
 }
 
 export default function App() {
   const [session, setSession] = useState(null);
   const [user, setUser] = useState(null);
   const [email, setEmail] = useState("");
-  const [loadingAuth, setLoadingAuth] = useState(true);
+  const [authLoading, setAuthLoading] = useState(true);
+
   const [sendingLink, setSendingLink] = useState(false);
   const [selectedType, setSelectedType] = useState("week");
-  const [topError, setTopError] = useState("");
-  const [infoMessage, setInfoMessage] = useState("");
   const [currentDraw, setCurrentDraw] = useState(null);
   const [myPost, setMyPost] = useState(null);
   const [leaderboard, setLeaderboard] = useState([]);
   const [recentPurchases, setRecentPurchases] = useState([]);
+  const [boostAnalytics, setBoostAnalytics] = useState([]);
+
+  const [traceHistory, setTraceHistory] = useState([]);
+  const [traceHistoryLoaded, setTraceHistoryLoaded] = useState(false);
+
+  const [topError, setTopError] = useState("");
+  const [info, setInfo] = useState("");
   const [loadingData, setLoadingData] = useState(false);
   const [voting, setVoting] = useState(false);
+  const [boosting, setBoosting] = useState(false);
+  const [debugOpen, setDebugOpen] = useState(false);
 
-  const selectedDrawMeta = useMemo(() => {
-    return DRAW_TYPES.find((d) => d.key === selectedType) || DRAW_TYPES[1];
-  }, [selectedType]);
+  const [aiProfile, setAiProfile] = useState(DEFAULT_AI_PROFILE);
+  const [aiOptimization, setAiOptimization] = useState(DEFAULT_AI_OPTIMIZATION);
+  const [aiEconomy, setAiEconomy] = useState(DEFAULT_AI_ECONOMY);
+  const [aiPolicy, setAiPolicy] = useState(DEFAULT_AI_POLICY);
+  const [aiControlCenter, setAiControlCenter] = useState(DEFAULT_AI_CONTROL);
+  const [aiAutopilot, setAiAutopilot] = useState(DEFAULT_AI_AUTOPILOT);
+  const [aiReleaseMode, setAiReleaseMode] = useState("balanced_production");
+
+  const [learningLoopResult, setLearningLoopResult] = useState(null);
+  const [runningLearningLoop, setRunningLearningLoop] = useState(false);
+
+  const isFounder = FOUNDER_EMAILS.includes(user?.email || "");
 
   useEffect(() => {
     let mounted = true;
 
-    async function init() {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
+    supabase.auth.getSession().then(({ data: { session } }) => {
       if (!mounted) return;
       setSession(session);
       setUser(session?.user ?? null);
       setEmail(session?.user?.email ?? "");
-      setLoadingAuth(false);
-    }
-
-    init();
+      setAuthLoading(false);
+    });
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      setEmail(session?.user?.email ?? "");
-      setLoadingAuth(false);
+    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      setUser(nextSession?.user ?? null);
+      setEmail(nextSession?.user?.email ?? "");
+      setAuthLoading(false);
     });
 
     return () => {
@@ -66,34 +169,204 @@ export default function App() {
 
   useEffect(() => {
     if (!user) return;
-    loadAll();
+    loadEverything();
   }, [user, selectedType]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    async function loadTraceHistory() {
+      try {
+        const { data, error } = await supabase
+          .from("ai_trace_history")
+          .select("*")
+          .eq("user_id", user.id)
+          .order("created_at", { ascending: false })
+          .limit(100);
+
+        if (error) throw error;
+        setTraceHistory(data || []);
+      } catch (err) {
+        console.error("Trace history load failed:", err.message);
+      } finally {
+        setTraceHistoryLoaded(true);
+      }
+    }
+
+    loadTraceHistory();
+  }, [user?.id]);
+
+  const effectiveControl = useMemo(() => {
+    return buildEffectiveControl(aiControlCenter, aiReleaseMode);
+  }, [aiControlCenter, aiReleaseMode]);
+
+  const policyAdjusted = useMemo(() => {
+    return applyPolicyLayer({
+      optimization: aiOptimization,
+      economy: aiEconomy,
+      policy: aiPolicy,
+    });
+  }, [aiOptimization, aiEconomy, aiPolicy]);
+
+  const effectiveOptimization = useMemo(() => {
+    return {
+      ...policyAdjusted.optimization,
+      aggressiveness: clamp(
+        Number(policyAdjusted.optimization?.aggressiveness || 0.5) +
+          Number(effectiveControl?.globalAggressivenessOverride || 0),
+        0.2,
+        Number(aiPolicy?.maxAggressiveness || 0.85)
+      ),
+      priceBias: clamp(
+        Number(policyAdjusted.optimization?.priceBias || 0) +
+          Number(effectiveControl?.globalPriceBiasOverride || 0),
+        Number(aiPolicy?.minPriceModifier || -2),
+        Number(aiPolicy?.maxPriceModifier || 2)
+      ),
+    };
+  }, [policyAdjusted, effectiveControl, aiPolicy]);
+
+  const effectiveEconomy = useMemo(() => {
+    return {
+      ...policyAdjusted.economy,
+      visibilityMultiplier: clamp(
+        Number(policyAdjusted.economy?.visibilityMultiplier || 1) +
+          Number(effectiveControl?.globalVisibilityBiasOverride || 0),
+        0.8,
+        Number(aiPolicy?.maxVisibilityMultiplier || 1.5)
+      ),
+    };
+  }, [policyAdjusted, effectiveControl, aiPolicy]);
+
+  const boostAnalyticsSummary = useMemo(() => {
+    return summarizeBoostAnalytics(boostAnalytics);
+  }, [boostAnalytics]);
+
+  const rankedLeaderboard = useMemo(() => {
+    return [...leaderboard]
+      .map((row) => ({
+        ...row,
+        rankingScore: getRankingScore({
+          votes: row.votes,
+          momentum: row.momentum,
+          visibility: row.visibility,
+          boostSpent: row.boosts_used || row.boosts || 0,
+          selectedType,
+          optimization: effectiveOptimization,
+        }),
+      }))
+      .sort((a, b) => {
+        if (b.rankingScore !== a.rankingScore) {
+          return b.rankingScore - a.rankingScore;
+        }
+        if (Number(b.votes || 0) !== Number(a.votes || 0)) {
+          return Number(b.votes || 0) - Number(a.votes || 0);
+        }
+        return Number(b.momentum || 0) - Number(a.momentum || 0);
+      });
+  }, [leaderboard, selectedType, effectiveOptimization]);
+
+  const currentRankNumber = useMemo(() => {
+    if (!myPost || !rankedLeaderboard.length) return 0;
+    return rankedLeaderboard.findIndex((row) => row.id === myPost.id) + 1 || 0;
+  }, [myPost, rankedLeaderboard]);
+
+  const rank = useMemo(() => {
+    return currentRankNumber > 0 ? `#${currentRankNumber}` : "-";
+  }, [currentRankNumber]);
+
+  const gap = useMemo(() => {
+    if (!myPost || !rankedLeaderboard.length) return 0;
+    const leader = rankedLeaderboard[0];
+    const me = rankedLeaderboard.find((row) => row.id === myPost.id);
+    if (!leader || !me) return 0;
+    return Math.max(
+      0,
+      Math.ceil(Number(leader.rankingScore || 0) - Number(me.rankingScore || 0))
+    );
+  }, [myPost, rankedLeaderboard]);
+
+  const aiState = useMemo(() => {
+    return getAiState({
+      rank: currentRankNumber,
+      gap,
+      momentum: Number(myPost?.momentum || 0),
+      visibility: Number(myPost?.visibility || 0),
+      boostsUsed: Number(myPost?.boosts_used || myPost?.boosts || 0),
+      votes: Number(myPost?.votes || 0),
+    });
+  }, [currentRankNumber, gap, myPost]);
+
+  const ai = useAiStack({
+    aiProfile,
+    aiOptimization: effectiveOptimization,
+    aiEconomy: effectiveEconomy,
+    aiPolicy,
+    aiControlCenter: effectiveControl,
+    aiAutopilot,
+    boostAnalyticsSummary,
+    context: {
+      gap,
+      momentum: Number(myPost?.momentum || 0),
+      visibility: Number(myPost?.visibility || 0),
+      boostsUsed: Number(myPost?.boosts_used || myPost?.boosts || 0),
+      selectedType,
+    },
+    helpers: {
+      getBoostPrice,
+      drawTypes: DRAW_TYPES,
+    },
+  });
+
+  const boostDecision = ai?.boost || {};
+  const visibilityDecision = ai?.visibility || {};
+  const autopilotDecision = ai?.autopilot || {};
+  const runtime = ai?.runtime || {};
+
+  const aiDebugInputs = useMemo(() => {
+    return {
+      gap,
+      momentum: Number(myPost?.momentum || 0),
+      visibility: Number(myPost?.visibility || 0),
+      boostsUsed: Number(myPost?.boosts_used || myPost?.boosts || 0),
+      selectedType,
+      rank: currentRankNumber,
+    };
+  }, [gap, myPost, selectedType, currentRankNumber]);
+
+  const aiDebugModels = useMemo(() => {
+    return {
+      optimization: effectiveOptimization,
+      economy: effectiveEconomy,
+      policy: aiPolicy,
+      control: effectiveControl,
+    };
+  }, [effectiveOptimization, effectiveEconomy, aiPolicy, effectiveControl]);
 
   async function sendMagicLink(e) {
     e.preventDefault();
     setTopError("");
-    setInfoMessage("");
+    setInfo("");
 
     if (!email.trim()) {
       setTopError("Anna sähköpostiosoite.");
       return;
     }
 
+    setSendingLink(true);
+
     try {
-      setSendingLink(true);
       const redirectTo = import.meta.env.VITE_APP_URL || window.location.origin;
 
       const { error } = await supabase.auth.signInWithOtp({
         email: email.trim(),
-        options: { emailRedirectTo: redirectTo },
+        options: {
+          emailRedirectTo: redirectTo,
+        },
       });
 
-      if (error) {
-        setTopError(`Virhe: ${error.message}`);
-        return;
-      }
-
-      setInfoMessage("Kirjautumislinkki lähetetty sähköpostiin.");
+      if (error) throw error;
+      setInfo("Kirjautumislinkki lähetetty sähköpostiin.");
     } catch (err) {
       setTopError(`Virhe: ${err.message}`);
     } finally {
@@ -103,20 +376,13 @@ export default function App() {
 
   async function signOut() {
     await supabase.auth.signOut();
-    setCurrentDraw(null);
-    setMyPost(null);
-    setLeaderboard([]);
-    setRecentPurchases([]);
-    setTopError("");
-    setInfoMessage("");
   }
 
-  async function loadAll() {
+  async function loadEverything() {
     if (!user) return;
 
     setLoadingData(true);
     setTopError("");
-    setInfoMessage("");
 
     try {
       const draw = await fetchActiveDraw(selectedType);
@@ -125,21 +391,16 @@ export default function App() {
         setCurrentDraw(null);
         setMyPost(null);
         setLeaderboard([]);
-        setRecentPurchases([]);
         setTopError("Omaa kolehtia ei löytynyt");
         return;
       }
 
       setCurrentDraw(draw);
-      setTopError("");
 
       const post = await ensureMyPost(draw.id);
       setMyPost(post);
 
-      await Promise.all([
-        fetchLeaderboard(draw.id),
-        fetchRecentPurchases(user.id),
-      ]);
+      await Promise.all([loadLeaderboard(draw.id), loadRecentPurchases(user.id)]);
     } catch (err) {
       setTopError(err.message || "Datan lataus epäonnistui.");
     } finally {
@@ -176,18 +437,17 @@ export default function App() {
 
     if (existing) return existing;
 
-    const defaultTitle = `${user.email || "käyttäjä"}n kolehti`;
-
     const { data: created, error: createError } = await supabase
       .from("posts")
       .insert({
         user_id: user.id,
         draw_id: drawId,
-        title: defaultTitle,
+        title: `${user.email || "käyttäjä"}n kolehti`,
         votes: 0,
         momentum: 20,
         visibility: 0,
         spent_total: 0,
+        boosts_used: 0,
         status: "active",
       })
       .select("*")
@@ -200,10 +460,10 @@ export default function App() {
     return created;
   }
 
-  async function fetchLeaderboard(drawId) {
+  async function loadLeaderboard(drawId) {
     const { data, error } = await supabase
       .from("posts")
-      .select("id, title, votes, momentum, visibility, spent_total, user_id")
+      .select("id, title, votes, momentum, visibility, spent_total, boosts_used, boosts, user_id")
       .eq("draw_id", drawId)
       .order("votes", { ascending: false })
       .order("momentum", { ascending: false })
@@ -216,7 +476,7 @@ export default function App() {
     setLeaderboard(data || []);
   }
 
-  async function fetchRecentPurchases(userId) {
+  async function loadRecentPurchases(userId) {
     const { data, error } = await supabase
       .from("purchases")
       .select("id, type, amount, created_at")
@@ -226,7 +486,11 @@ export default function App() {
 
     if (error) {
       const msg = error.message || "";
-      if (msg.includes("relation") || msg.includes("does not exist") || msg.includes("schema cache")) {
+      if (
+        msg.includes("does not exist") ||
+        msg.includes("relation") ||
+        msg.includes("schema cache")
+      ) {
         setRecentPurchases([]);
         return;
       }
@@ -236,375 +500,801 @@ export default function App() {
     setRecentPurchases(data || []);
   }
 
-  async function handleVote() {
-    if (!myPost || !currentDraw) return;
+  async function logDecisionTrace({
+    decisionType,
+    eventType,
+    trace,
+    inputs,
+    outputs,
+  }) {
+    if (!user?.id) return;
 
     try {
-      setVoting(true);
-      setTopError("");
-      setInfoMessage("");
+      const payload = await saveTraceHistoryEntry({
+        supabase,
+        userId: user.id,
+        decisionType,
+        eventType,
+        trace,
+        inputs,
+        outputs,
+        contextSnapshot: {
+          releaseMode: aiReleaseMode,
+          controlMode: effectiveControl?.mode,
+          runtimeHealth: runtime?.health,
+          drawId: currentDraw?.id || null,
+          drawType: selectedType,
+          postId: myPost?.id || null,
+        },
+      });
 
-      const nextVotes = Number(myPost.votes || 0) + 1;
-      const nextMomentum = Number(myPost.momentum || 0) + 5;
-      const nextVisibility = Number(myPost.visibility || 0) + 1;
+      if (payload) {
+        setTraceHistory((prev) => [payload, ...prev].slice(0, 100));
+      }
+    } catch (err) {
+      console.error("Trace logging failed:", err.message);
+    }
+  }
 
+  async function handleVote() {
+    if (!myPost) return;
+
+    setVoting(true);
+    setTopError("");
+    setInfo("");
+
+    try {
       const { data, error } = await supabase
         .from("posts")
         .update({
-          votes: nextVotes,
-          momentum: nextMomentum,
-          visibility: nextVisibility,
+          votes: Number(myPost.votes || 0) + 1,
+          momentum: Number(myPost.momentum || 0) + 1,
+          visibility: Number(myPost.visibility || 0) + 1,
         })
         .eq("id", myPost.id)
         .select("*")
         .single();
 
-      if (error) {
-        throw new Error(`Äänen tallennus epäonnistui: ${error.message}`);
-      }
+      if (error) throw error;
 
       setMyPost(data);
-      await fetchLeaderboard(currentDraw.id);
-      setInfoMessage("Ääni lisätty.");
+
+      setAiProfile((prev) => ({
+        ...prev,
+        reactsToAlmostWin: clamp(
+          Number(prev.reactsToAlmostWin || 0.5) + (gap <= 1 ? 0.03 : 0.01),
+          0,
+          1
+        ),
+        reactsToMomentum: clamp(
+          Number(prev.reactsToMomentum || 0.5) +
+            (Number(myPost?.momentum || 0) >= 10 ? 0.03 : 0.01),
+          0,
+          1
+        ),
+      }));
+
+      setInfo("Ääni lisätty.");
+      await loadLeaderboard(currentDraw.id);
     } catch (err) {
-      setTopError(err.message || "Äänen lisäys epäonnistui.");
+      setTopError(`Äänen tallennus epäonnistui: ${err.message}`);
     } finally {
       setVoting(false);
     }
   }
 
-  function getRank() {
-    if (!myPost || !leaderboard.length) return "-";
-    const index = leaderboard.findIndex((item) => item.id === myPost.id);
-    return index >= 0 ? `#${index + 1}` : "-";
+  async function handleBoost() {
+    if (!myPost || !currentDraw) return;
+
+    if (
+      Number(myPost?.boosts_used || myPost?.boosts || 0) >=
+      Number(boostDecision?.boostLimit || 0)
+    ) {
+      setTopError("Boost-kiintiö täynnä tässä arvonnassa.");
+      return;
+    }
+
+    setBoosting(true);
+    setTopError("");
+    setInfo("");
+
+    const price = Number(boostDecision?.recommendedPrice || 1);
+    const finalMomentumGain = Math.round(
+      Number(boostDecision?.estimatedMomentumGain || 0)
+    );
+    const finalVisibilityGain = Math.round(
+      Number(boostDecision?.estimatedVisibilityGain || 0)
+    );
+
+    try {
+      await logDecisionTrace({
+        decisionType: "boost",
+        eventType: "boost_clicked",
+        trace: boostDecision?.trace || [],
+        inputs: {
+          gap,
+          momentum: Number(myPost?.momentum || 0),
+          visibility: Number(myPost?.visibility || 0),
+          boostsUsed: Number(myPost?.boosts_used || myPost?.boosts || 0),
+          selectedType,
+        },
+        outputs: {
+          score: boostDecision?.score,
+          urgency: boostDecision?.urgency,
+          recommendedPrice: boostDecision?.recommendedPrice,
+        },
+      });
+
+      setBoostAnalytics((prev) =>
+        trackLocalEvent(prev, "clicked", {
+          urgency: boostDecision?.urgency,
+          recommended_price: boostDecision?.recommendedPrice,
+          ai_score: boostDecision?.score,
+        })
+      );
+
+      const { data, error } = await supabase
+        .from("posts")
+        .update({
+          momentum: Number(myPost.momentum || 0) + finalMomentumGain,
+          visibility: Number(myPost.visibility || 0) + finalVisibilityGain,
+          spent_total: Number(myPost.spent_total || 0) + price,
+          boosts_used: Number(myPost.boosts_used || myPost.boosts || 0) + 1,
+        })
+        .eq("id", myPost.id)
+        .select("*")
+        .single();
+
+      if (error) throw error;
+
+      const { error: purchaseError } = await supabase.from("purchases").insert({
+        user_id: user.id,
+        type: "BOOST_PUSH",
+        amount: price,
+      });
+
+      if (purchaseError) {
+        const msg = purchaseError.message || "";
+        if (
+          !msg.includes("does not exist") &&
+          !msg.includes("relation") &&
+          !msg.includes("schema cache")
+        ) {
+          throw purchaseError;
+        }
+      }
+
+      setMyPost(data);
+
+      setAiProfile((prev) => ({
+        ...prev,
+        paysInCriticalMoments: clamp(
+          Number(prev.paysInCriticalMoments || 0.5) + 0.05,
+          0,
+          1
+        ),
+        ignoresOffers: clamp(Number(prev.ignoresOffers || 0.5) - 0.03, 0, 1),
+      }));
+
+      await logDecisionTrace({
+        decisionType: "boost",
+        eventType: "boost_purchased",
+        trace: boostDecision?.trace || [],
+        inputs: {
+          gap,
+          momentum: Number(myPost?.momentum || 0),
+          visibility: Number(myPost?.visibility || 0),
+          boostsUsed: Number(myPost?.boosts_used || myPost?.boosts || 0),
+          selectedType,
+        },
+        outputs: {
+          score: boostDecision?.score,
+          urgency: boostDecision?.urgency,
+          recommendedPrice: boostDecision?.recommendedPrice,
+          finalMomentumGain,
+          finalVisibilityGain,
+        },
+      });
+
+      setBoostAnalytics((prev) =>
+        trackLocalEvent(prev, "purchased", {
+          urgency: boostDecision?.urgency,
+          recommended_price: boostDecision?.recommendedPrice,
+          ai_score: boostDecision?.score,
+        })
+      );
+
+      setInfo(`Boost käytetty (${price} €).`);
+      await Promise.all([loadLeaderboard(currentDraw.id), loadRecentPurchases(user.id)]);
+    } catch (err) {
+      setTopError(`Boost epäonnistui: ${err.message}`);
+    } finally {
+      setBoosting(false);
+    }
   }
 
-  function getGapToLeader() {
-    if (!myPost || !leaderboard.length) return 0;
-    const leader = leaderboard[0];
-    if (!leader) return 0;
-    return Math.max(0, Number(leader.votes || 0) - Number(myPost.votes || 0));
+  async function handleIgnoreAi() {
+    await logDecisionTrace({
+      decisionType: "boost",
+      eventType: "boost_ignored",
+      trace: boostDecision?.trace || [],
+      inputs: {
+        gap,
+        momentum: Number(myPost?.momentum || 0),
+        visibility: Number(myPost?.visibility || 0),
+        boostsUsed: Number(myPost?.boosts_used || myPost?.boosts || 0),
+        selectedType,
+      },
+      outputs: {
+        score: boostDecision?.score,
+        urgency: boostDecision?.urgency,
+        recommendedPrice: boostDecision?.recommendedPrice,
+      },
+    });
+
+    setAiProfile((prev) => ({
+      ...prev,
+      ignoresOffers: clamp(Number(prev.ignoresOffers || 0.5) + 0.05, 0, 1),
+    }));
+
+    setBoostAnalytics((prev) =>
+      trackLocalEvent(prev, "ignored", {
+        urgency: boostDecision?.urgency,
+        recommended_price: boostDecision?.recommendedPrice,
+        ai_score: boostDecision?.score,
+      })
+    );
+
+    setInfo("AI ottaa tämän huomioon.");
   }
 
-  const rank = getRank();
-  const gap = getGapToLeader();
+  async function runAiLearningLoop() {
+    if (!isFounder) return;
 
-  if (loadingAuth) {
-    return <div style={styles.page}><div style={styles.centerWrap}><div style={styles.card}>Ladataan...</div></div></div>;
+    setRunningLearningLoop(true);
+
+    try {
+      const result = buildLearningLoop({
+        traceRows: traceHistory,
+        aiOptimization,
+        aiEconomy,
+        aiPolicy,
+      });
+
+      setLearningLoopResult(result);
+
+      if (!result?.changed) {
+        setInfo("AI learning loop ei löytänyt vielä tarpeeksi vahvaa muutosta.");
+        return;
+      }
+
+      const nextOptimization = result.nextOptimization;
+      const nextEconomy = result.nextEconomy;
+
+      const [{ error: optimizationError }, { error: economyError }] =
+        await Promise.all([
+          supabase
+            .from("ai_optimization_models")
+            .update({
+              aggressiveness: nextOptimization.aggressiveness,
+              price_bias: nextOptimization.priceBias,
+              high_threshold: nextOptimization.highThreshold,
+              medium_threshold: nextOptimization.mediumThreshold,
+              soft_threshold: nextOptimization.softThreshold,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("user_id", user.id),
+
+          supabase
+            .from("ai_economy_models")
+            .update({
+              price_modifier: nextEconomy.priceModifier,
+              boost_strength_multiplier: nextEconomy.boostStrengthMultiplier,
+              visibility_multiplier: nextEconomy.visibilityMultiplier,
+              urgency_bias: nextEconomy.urgencyBias,
+              fairness_guard: nextEconomy.fairnessGuard,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("user_id", user.id),
+        ]);
+
+      if (optimizationError) throw optimizationError;
+      if (economyError) throw economyError;
+
+      setAiOptimization(nextOptimization);
+      setAiEconomy(nextEconomy);
+
+      setInfo("AI learning loop päivitti malleja.");
+    } catch (err) {
+      console.error("AI learning loop failed:", err.message);
+      setTopError(`AI learning loop epäonnistui: ${err.message}`);
+    } finally {
+      setRunningLearningLoop(false);
+    }
   }
 
-  if (!user) {
+  useEffect(() => {
+    if (!boostDecision?.showBoost) return;
+
+    setBoostAnalytics((prev) => {
+      const latest = prev[0];
+
+      if (
+        latest?.action === "shown" &&
+        latest?.urgency === boostDecision?.urgency &&
+        Number(latest?.recommended_price || 0) ===
+          Number(boostDecision?.recommendedPrice || 0)
+      ) {
+        return prev;
+      }
+
+      logDecisionTrace({
+        decisionType: "boost",
+        eventType: "boost_shown",
+        trace: boostDecision?.trace || [],
+        inputs: {
+          gap,
+          momentum: Number(myPost?.momentum || 0),
+          visibility: Number(myPost?.visibility || 0),
+          boostsUsed: Number(myPost?.boosts_used || myPost?.boosts || 0),
+          selectedType,
+        },
+        outputs: {
+          score: boostDecision?.score,
+          urgency: boostDecision?.urgency,
+          showBoost: boostDecision?.showBoost,
+          recommendedPrice: boostDecision?.recommendedPrice,
+        },
+      });
+
+      return trackLocalEvent(prev, "shown", {
+        urgency: boostDecision?.urgency,
+        recommended_price: boostDecision?.recommendedPrice,
+        ai_score: boostDecision?.score,
+      });
+    });
+  }, [
+    boostDecision?.showBoost,
+    boostDecision?.urgency,
+    boostDecision?.recommendedPrice,
+    boostDecision?.score,
+    gap,
+    myPost,
+    selectedType,
+  ]);
+
+  if (authLoading) {
     return (
-      <div style={styles.page}>
-        <div style={styles.centerWrap}>
-          <form style={styles.card} onSubmit={sendMagicLink}>
-            <div style={styles.logo}>KOLEHTI</div>
-            <h1 style={styles.title}>Kirjaudu sisään</h1>
-            <p style={styles.subtitle}>Saat sähköpostiisi kirjautumislinkin.</p>
-            <input
-              style={styles.input}
-              type="email"
-              placeholder="sinä@esimerkki.fi"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-            <button type="submit" style={styles.primaryButton} disabled={sendingLink}>
-              {sendingLink ? "Lähetetään..." : "Lähetä kirjautumislinkki"}
-            </button>
-            {topError ? <div style={styles.errorText}>{topError}</div> : null}
-            {infoMessage ? <div style={styles.infoText}>{infoMessage}</div> : null}
-          </form>
+      <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
+        <div className="rounded-3xl border border-white/10 bg-white/5 px-8 py-6 backdrop-blur">
+          Ladataan...
         </div>
       </div>
     );
   }
 
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(59,76,202,0.28),_rgba(2,6,23,1)_42%)] text-white flex items-center justify-center p-6">
+        <motion.form
+          initial={{ opacity: 0, y: 18 }}
+          animate={{ opacity: 1, y: 0 }}
+          onSubmit={sendMagicLink}
+          className="w-full max-w-xl rounded-[32px] border border-white/10 bg-white/5 p-8 shadow-2xl backdrop-blur-xl"
+        >
+          <div className="mb-2 text-sm font-black tracking-[0.3em] text-white/80">
+            KOLEHTI
+          </div>
+          <h1 className="text-5xl font-black leading-none md:text-7xl">
+            Kirjaudu sisään
+          </h1>
+          <p className="mt-3 text-lg text-white/70">
+            Saat sähköpostiisi kirjautumislinkin.
+          </p>
+
+          <input
+            className="mt-8 w-full rounded-[24px] border border-white/10 bg-white/5 px-5 py-4 text-xl outline-none placeholder:text-white/35"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="sinä@esimerkki.fi"
+            type="email"
+          />
+
+          <button
+            type="submit"
+            disabled={sendingLink}
+            className="mt-5 w-full rounded-[24px] bg-gradient-to-r from-indigo-500 to-violet-500 px-5 py-4 text-xl font-extrabold shadow-lg shadow-violet-900/30 transition hover:scale-[1.01] active:scale-[0.99] disabled:opacity-60"
+          >
+            {sendingLink ? "Lähetetään..." : "Lähetä kirjautumislinkki"}
+          </button>
+
+          <AnimatePresence>
+            {topError ? (
+              <motion.div
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                className="mt-4 text-red-300"
+              >
+                {topError}
+              </motion.div>
+            ) : null}
+
+            {info ? (
+              <motion.div
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                className="mt-4 text-emerald-300"
+              >
+                {info}
+              </motion.div>
+            ) : null}
+          </AnimatePresence>
+        </motion.form>
+      </div>
+    );
+  }
+
   return (
-    <div style={styles.page}>
-      <div style={styles.container}>
-        {topError ? <div style={styles.bannerError}>{topError}</div> : null}
-        {infoMessage ? <div style={styles.bannerInfo}>{infoMessage}</div> : null}
+    <div className="min-h-screen overflow-x-hidden bg-[radial-gradient(circle_at_top,_rgba(59,76,202,0.28),_rgba(2,6,23,1)_42%)] text-white">
+      <div className="mx-auto max-w-3xl px-4 pb-16 pt-8 md:px-6">
+        <AnimatePresence>
+          {topError ? (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              className="mb-5 rounded-[28px] border border-white/10 bg-white/5 px-5 py-4 text-center font-bold text-white/95 backdrop-blur"
+            >
+              {topError}
+            </motion.div>
+          ) : null}
 
-        <div style={styles.logo}>KOLEHTI</div>
-        <h1 style={styles.hero}>Kolehti AI</h1>
-        <div style={styles.email}>{user.email}</div>
+          {info ? (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              className="mb-5 rounded-[28px] border border-emerald-400/20 bg-emerald-400/10 px-5 py-4 text-center font-semibold text-emerald-100 backdrop-blur"
+            >
+              {info}
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
 
-        <div style={styles.card}>
-          <div style={styles.cardLabel}>Arvonnan tyyppi</div>
-          <div style={styles.tabRow}>
+        <motion.div
+          initial={{ opacity: 0, y: 14 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-6"
+        >
+          <div className="text-sm font-black tracking-[0.3em] text-white/80">
+            KOLEHTI
+          </div>
+          <div className="mt-2 text-5xl font-black leading-none md:text-7xl">
+            Kolehti AI
+          </div>
+          <div className="mt-3 text-lg text-white/75">{user.email}</div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 14 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="rounded-[30px] border border-white/10 bg-white/5 p-5 backdrop-blur-xl shadow-2xl mb-5"
+        >
+          <div className="mb-4 text-lg text-white/85">Arvonnan tyyppi</div>
+          <div className="grid grid-cols-3 gap-3">
             {DRAW_TYPES.map((draw) => (
               <button
                 key={draw.key}
                 onClick={() => setSelectedType(draw.key)}
-                style={{ ...styles.tabButton, ...(selectedType === draw.key ? styles.tabButtonActive : {}) }}
+                className={`rounded-[22px] px-4 py-4 text-xl font-extrabold transition ${
+                  selectedType === draw.key
+                    ? "bg-orange-400 text-slate-950"
+                    : "border border-white/10 bg-white/5 text-white"
+                }`}
               >
                 {draw.label}
               </button>
             ))}
           </div>
-        </div>
+        </motion.div>
 
-        <div style={styles.card}>
-          <div style={styles.cardLabel}>Oma tilanne</div>
-          <div style={styles.bigRank}>Sijoitus: {rank}</div>
-          <div style={styles.statusRow}>👍 Tilanne auki</div>
-          <div style={styles.statLine}>Ero: {gap} · Momentum: {myPost?.momentum ?? 0}</div>
-          <div style={styles.statLine}>Omat äänet: {myPost?.votes ?? 0}</div>
-          <div style={styles.statLine}>Näkyvyys: {myPost?.visibility ?? 0}</div>
-          <div style={styles.statLine}>Ostot yhteensä: {euro(myPost?.spent_total ?? 0)}</div>
-        </div>
+        <motion.div
+          initial={{ opacity: 0, y: 14 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="rounded-[30px] border border-white/10 bg-white/5 p-6 backdrop-blur-xl shadow-2xl mb-5 relative overflow-hidden"
+        >
+          <div className="mb-4 text-lg text-white/85">Oma tilanne</div>
+          <div className="text-5xl md:text-7xl font-black leading-none">
+            Sijoitus: {rank}
+          </div>
+          <div className="mt-4 flex items-center gap-2 text-3xl font-extrabold">
+            <span>👍</span>
+            <span>Tilanne auki</span>
+          </div>
+          <div className="mt-4 text-2xl text-white/80">
+            Ero: {gap} · Momentum: {myPost?.momentum ?? 0}
+          </div>
+          <div className="mt-3 text-2xl text-white/90">
+            Omat äänet: {myPost?.votes ?? 0}
+          </div>
+          <div className="mt-2 text-2xl text-white/90">
+            Näkyvyys: {myPost?.visibility ?? 0}
+          </div>
+          <div className="mt-2 text-2xl text-white/90">
+            Ostot yhteensä: {euro(myPost?.spent_total ?? 0)}
+          </div>
+        </motion.div>
 
-        <div style={styles.card}>
-          <div style={styles.cardLabel}>Päätoiminto</div>
-          <button onClick={handleVote} style={styles.primaryButton} disabled={!myPost || voting || loadingData}>
+        <motion.div
+          initial={{ opacity: 0, y: 14 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="rounded-[30px] border border-amber-300/10 bg-gradient-to-br from-amber-500/10 via-transparent to-violet-500/10 p-5 backdrop-blur-xl shadow-2xl mb-5"
+        >
+          <div className="mb-2 flex items-center gap-2 text-amber-300 text-lg font-bold">
+            <Target className="h-5 w-5" />
+            Kolehti AI
+          </div>
+
+          <div className="text-4xl font-black leading-tight">
+            {typeof aiState === "string" ? aiState : aiState?.title || "AI state"}
+          </div>
+
+          <div className="mt-2 text-white/80">
+            {typeof aiState === "string"
+              ? "AI state aktiivinen."
+              : aiState?.message || ""}
+          </div>
+
+          <div className="mt-4 rounded-[20px] border border-white/10 bg-black/20 px-4 py-4">
+            <div className="text-sm font-bold uppercase tracking-wide text-white/60">
+              Boost-suositus
+            </div>
+            <div className="mt-2 text-2xl font-black">
+              {boostDecision?.showBoost ? "🚀 Boost kannattaa nyt" : "⏳ Odota vielä"}
+            </div>
+            <div className="mt-2 text-white/80">{boostDecision?.message}</div>
+            <div className="mt-3 text-sm text-white/60">
+              AI score: {Math.round(Number(boostDecision?.score || 0))} · urgency:{" "}
+              {boostDecision?.urgency}
+            </div>
+            <div className="mt-2 text-lg font-bold text-amber-300">
+              Suositushinta: {boostDecision?.recommendedPrice} €
+            </div>
+          </div>
+
+          <div className="mt-4 rounded-[20px] border border-white/10 bg-black/20 px-4 py-4">
+            <div className="text-sm font-bold uppercase tracking-wide text-white/60">
+              Visibility engine
+            </div>
+            <div className="mt-2 text-2xl font-black">
+              {visibilityDecision?.visibilityIntent}
+            </div>
+            <div className="mt-2 text-white/80">
+              {visibilityDecision?.visibilityMessage}
+            </div>
+            <div className="mt-3 text-sm text-white/60">
+              score: {Math.round(Number(visibilityDecision?.score || 0))} ·
+              multiplier: {Number(visibilityDecision?.visibilityMultiplier || 1).toFixed(2)}x
+            </div>
+          </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 14 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="rounded-[30px] border border-white/10 bg-white/5 p-5 backdrop-blur-xl shadow-2xl mb-5"
+        >
+          <div className="mb-4 text-lg text-white/85">Päätoiminto</div>
+          <motion.button
+            whileTap={{ scale: 0.985 }}
+            onClick={handleVote}
+            disabled={!myPost || voting || loadingData}
+            className="w-full rounded-[24px] bg-gradient-to-r from-indigo-500 to-violet-500 px-5 py-5 text-2xl font-extrabold shadow-lg shadow-violet-900/30 disabled:opacity-60"
+          >
             {voting ? "Tallennetaan..." : "👍 Anna ääni"}
-          </button>
-        </div>
+          </motion.button>
+        </motion.div>
 
-        <div style={styles.card}>
-          <div style={styles.cardLabel}>AI boost-ehdotus</div>
-          <div style={styles.statLine}>{selectedType === "day" ? "0/2 käytetty" : selectedType === "week" ? "0/4 käytetty" : "0/6 käytetty"}</div>
-          <div style={styles.smallMuted}>Seuraava boosti: 1 €</div>
-          <div style={styles.smallMuted}>Perushinta: 2 €</div>
-          <div style={styles.smallMuted}>AI suosittelee odottamaan parempaa hetkeä.</div>
-          <div style={styles.smallMuted}>Seuraavan boostin vaikutus olisi: +20 momentum · gap -1</div>
-        </div>
+        <motion.div
+          initial={{ opacity: 0, y: 14 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="rounded-[30px] border border-white/10 bg-white/5 p-5 backdrop-blur-xl shadow-2xl mb-5"
+        >
+          <div className="mb-4 text-lg text-white/85">Boost</div>
+          <div className="text-white/75 mb-3">
+            Boostit: {Number(myPost?.boosts_used || myPost?.boosts || 0)}/
+            {Number(boostDecision?.boostLimit || 0)}
+          </div>
 
-        <div style={styles.card}>
-          <div style={styles.cardLabel}>Leaderboard</div>
-          {leaderboard.length === 0 ? (
-            <div style={styles.smallMuted}>Ei vielä rivejä.</div>
-          ) : (
-            <div style={styles.list}>
-              {leaderboard.map((item, index) => (
-                <div key={item.id} style={styles.listItem}>
-                  <div><strong>#{index + 1} {item.title || "kolehti"}</strong></div>
-                  <div style={styles.listMeta}>{item.votes || 0} ääntä</div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {boostDecision?.showBoost ? (
+              <motion.button
+                whileTap={{ scale: 0.985 }}
+                onClick={handleBoost}
+                disabled={
+                  !myPost ||
+                  boosting ||
+                  Number(myPost?.boosts_used || myPost?.boosts || 0) >=
+                    Number(boostDecision?.boostLimit || 0)
+                }
+                className="rounded-[22px] bg-orange-400 px-5 py-4 text-xl font-black text-slate-950 disabled:opacity-50"
+              >
+                {boosting
+                  ? "Käytetään..."
+                  : `🚀 Käytä boosti (${boostDecision?.recommendedPrice} €)`}
+              </motion.button>
+            ) : (
+              <button
+                onClick={handleIgnoreAi}
+                className="rounded-[22px] border border-white/10 bg-white/5 px-5 py-4 text-xl font-black text-white/70"
+              >
+                Ei vielä boostia
+              </button>
+            )}
+
+            <button
+              onClick={handleIgnoreAi}
+              className="rounded-[22px] border border-white/10 bg-white/5 px-5 py-4 text-xl font-black text-white"
+            >
+              Ei nyt
+            </button>
+          </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 14 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="rounded-[30px] border border-white/10 bg-white/5 p-5 backdrop-blur-xl shadow-2xl mb-5"
+        >
+          <div className="mb-4 text-lg text-white/85">Leaderboard</div>
+          <div className="space-y-3">
+            <AnimatePresence>
+              {rankedLeaderboard.length === 0 ? (
+                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-white/65">
+                  Ei vielä rivejä.
+                </motion.div>
+              ) : (
+                rankedLeaderboard.map((item, index) => {
+                  const mine = item.id === myPost?.id;
+
+                  return (
+                    <motion.div
+                      layout
+                      key={item.id}
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className={`flex items-center justify-between rounded-[20px] px-4 py-4 ${
+                        mine
+                          ? "bg-violet-500/30 ring-1 ring-violet-300/30"
+                          : "bg-indigo-500/20"
+                      }`}
+                    >
+                      <div>
+                        <div className="text-2xl font-extrabold">
+                          #{index + 1} {item.title || "kolehti"}
+                        </div>
+
+                        <div className="mt-1 text-sm text-white/65 inline-flex items-center gap-3">
+                          <span className="inline-flex items-center gap-1">
+                            <TrendingUp className="h-4 w-4" />
+                            {item.momentum || 0}
+                          </span>
+                          <span className="inline-flex items-center gap-1">
+                            <Eye className="h-4 w-4" />
+                            {item.visibility || 0}
+                          </span>
+                          <span className="inline-flex items-center gap-1">
+                            <Coins className="h-4 w-4" />
+                            {euro(item.spent_total || 0)}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="text-right">
+                        <div className="text-2xl font-bold">
+                          {Number(item.rankingScore || 0).toFixed(1)}
+                        </div>
+                        <div className="text-white/65">AI rank score</div>
+                      </div>
+                    </motion.div>
+                  );
+                })
+              )}
+            </AnimatePresence>
+          </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 14 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="rounded-[30px] border border-white/10 bg-white/5 p-5 backdrop-blur-xl shadow-2xl mb-5"
+        >
+          <div className="mb-4 text-lg text-white/85">Viimeisimmät ostot</div>
+          <div className="space-y-3">
+            {recentPurchases.length === 0 ? (
+              <div className="text-white/65">Ei ostoja.</div>
+            ) : (
+              recentPurchases.map((purchase) => (
+                <div
+                  key={purchase.id}
+                  className="flex items-center justify-between rounded-[18px] bg-white/5 px-4 py-4"
+                >
+                  <div className="text-xl font-bold">{purchase.type}</div>
+                  <div className="text-xl text-white/85">{euro(purchase.amount || 0)}</div>
                 </div>
-              ))}
+              ))
+            )}
+          </div>
+        </motion.div>
+
+        {isFounder ? (
+          <>
+            <FounderDashboard
+              ai={ai}
+              profile={aiProfile}
+              releaseMode={aiReleaseMode}
+              onRunLearningLoop={runAiLearningLoop}
+              runningLearningLoop={runningLearningLoop}
+              learningLoopResult={learningLoopResult}
+              aiOptimization={aiOptimization}
+              aiEconomy={aiEconomy}
+            />
+
+            <div className="mb-5">
+              <AiDebugPanel
+                isOpen={debugOpen}
+                onToggle={() => setDebugOpen((prev) => !prev)}
+                ai={ai}
+                inputs={aiDebugInputs}
+                models={aiDebugModels}
+                profile={aiProfile}
+                releaseMode={aiReleaseMode}
+              />
             </div>
-          )}
-        </div>
 
-        <div style={styles.card}>
-          <div style={styles.cardLabel}>Viimeisimmät ostot</div>
-          {recentPurchases.length === 0 ? (
-            <div style={styles.smallMuted}>Ei ostoja.</div>
-          ) : (
-            <div style={styles.list}>
-              {recentPurchases.map((item) => (
-                <div key={item.id} style={styles.listItem}>
-                  <div><strong>{item.type}</strong></div>
-                  <div style={styles.listMeta}>{euro(item.amount || 0)}</div>
-                </div>
-              ))}
+            <div className="mb-5">
+              <AiTraceHistory rows={traceHistory} />
             </div>
-          )}
-        </div>
+          </>
+        ) : null}
 
-        <div style={styles.card}>
-          <div style={styles.cardLabel}>Testaus</div>
-          <button style={styles.secondaryButton} onClick={loadAll}>Päivitä tila</button>
-          <button style={styles.secondaryButton} onClick={signOut}>Kirjaudu ulos</button>
-        </div>
+        <motion.div
+          initial={{ opacity: 0, y: 14 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="rounded-[30px] border border-white/10 bg-white/5 p-5 backdrop-blur-xl shadow-2xl"
+        >
+          <div className="mb-4 text-lg text-white/85">Testaus</div>
 
-        <div style={styles.footerSpace}>
-          <div style={styles.smallMuted}>Aktiivinen arvonta: {selectedDrawMeta.label} ({selectedType})</div>
-          <div style={styles.smallMuted}>Draw ID: {currentDraw?.id || "-"}</div>
-        </div>
+          <div className="grid gap-3">
+            <button
+              onClick={loadEverything}
+              className="inline-flex items-center justify-center gap-2 rounded-[22px] border border-white/10 bg-white/5 px-5 py-4 text-xl font-black"
+            >
+              <RefreshCw className="h-5 w-5" />
+              Päivitä tila
+            </button>
+
+            <button
+              onClick={signOut}
+              className="inline-flex items-center justify-center gap-2 rounded-[22px] border border-white/10 bg-white/5 px-5 py-4 text-xl font-black"
+            >
+              <LogOut className="h-5 w-5" />
+              Kirjaudu ulos
+            </button>
+          </div>
+
+          <div className="mt-5 space-y-1 text-sm text-white/55">
+            <div>Aktiivinen arvonta: {selectedType}</div>
+            <div>Draw ID: {currentDraw?.id || "-"}</div>
+            <div>Release mode: {aiReleaseMode}</div>
+            <div>Trace rows: {traceHistoryLoaded ? traceHistory.length : "..."}</div>
+            <div>Autopilot mode: {autopilotDecision?.recommendedMode || "-"}</div>
+            <div>Runtime health: {runtime?.health || "-"}</div>
+          </div>
+        </motion.div>
       </div>
     </div>
   );
 }
-
-const styles = {
-  page: {
-    minHeight: "100vh",
-    background: "radial-gradient(circle at top, rgba(31,45,120,0.45), rgba(4,6,18,1) 40%)",
-    color: "#fff",
-    fontFamily: 'Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-  },
-  centerWrap: {
-    minHeight: "100vh",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 24,
-  },
-  container: {
-    maxWidth: 720,
-    margin: "0 auto",
-    padding: 24,
-  },
-  logo: {
-    letterSpacing: 4,
-    fontWeight: 800,
-    fontSize: 18,
-    opacity: 0.9,
-    marginBottom: 8,
-  },
-  hero: {
-    fontSize: 60,
-    lineHeight: 1,
-    margin: "0 0 10px 0",
-    fontWeight: 800,
-  },
-  email: {
-    fontSize: 18,
-    opacity: 0.9,
-    marginBottom: 20,
-  },
-  card: {
-    background: "rgba(255,255,255,0.06)",
-    border: "1px solid rgba(255,255,255,0.08)",
-    borderRadius: 28,
-    padding: 22,
-    marginBottom: 18,
-    boxShadow: "0 8px 30px rgba(0,0,0,0.22)",
-    backdropFilter: "blur(8px)",
-  },
-  cardLabel: {
-    fontSize: 16,
-    opacity: 0.9,
-    marginBottom: 14,
-  },
-  title: {
-    fontSize: 56,
-    lineHeight: 1,
-    margin: "0 0 12px 0",
-    fontWeight: 800,
-  },
-  subtitle: {
-    fontSize: 16,
-    opacity: 0.85,
-    marginBottom: 20,
-  },
-  input: {
-    width: "100%",
-    fontSize: 18,
-    padding: "18px 20px",
-    borderRadius: 20,
-    outline: "none",
-    border: "1px solid rgba(255,255,255,0.12)",
-    background: "rgba(255,255,255,0.05)",
-    color: "#fff",
-    boxSizing: "border-box",
-    marginBottom: 18,
-  },
-  primaryButton: {
-    width: "100%",
-    border: "none",
-    borderRadius: 22,
-    padding: "18px 20px",
-    fontSize: 18,
-    fontWeight: 800,
-    color: "#fff",
-    background: "linear-gradient(90deg, #6c63ff 0%, #9b5cff 100%)",
-    cursor: "pointer",
-    marginBottom: 10,
-  },
-  secondaryButton: {
-    width: "100%",
-    border: "1px solid rgba(255,255,255,0.12)",
-    borderRadius: 22,
-    padding: "16px 20px",
-    fontSize: 18,
-    fontWeight: 700,
-    color: "#fff",
-    background: "rgba(255,255,255,0.06)",
-    cursor: "pointer",
-    marginBottom: 12,
-  },
-  bannerError: {
-    background: "rgba(255,255,255,0.04)",
-    border: "1px solid rgba(255,255,255,0.08)",
-    borderRadius: 24,
-    padding: "18px 20px",
-    marginBottom: 20,
-    textAlign: "center",
-    fontSize: 16,
-    fontWeight: 700,
-  },
-  bannerInfo: {
-    background: "rgba(87, 201, 126, 0.14)",
-    border: "1px solid rgba(87, 201, 126, 0.28)",
-    borderRadius: 24,
-    padding: "14px 18px",
-    marginBottom: 20,
-    textAlign: "center",
-    fontSize: 15,
-  },
-  errorText: {
-    color: "#ffb4b4",
-    marginTop: 6,
-    fontSize: 15,
-  },
-  infoText: {
-    color: "#b7ffcf",
-    marginTop: 6,
-    fontSize: 15,
-  },
-  tabRow: {
-    display: "flex",
-    gap: 14,
-  },
-  tabButton: {
-    flex: 1,
-    padding: "16px 12px",
-    borderRadius: 22,
-    border: "1px solid rgba(255,255,255,0.12)",
-    background: "rgba(255,255,255,0.04)",
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: 800,
-    cursor: "pointer",
-  },
-  tabButtonActive: {
-    background: "#f4a11a",
-    color: "#111",
-    border: "1px solid transparent",
-  },
-  bigRank: {
-    fontSize: 54,
-    lineHeight: 1.05,
-    fontWeight: 900,
-    marginBottom: 12,
-  },
-  statusRow: {
-    fontSize: 20,
-    fontWeight: 800,
-    marginBottom: 10,
-  },
-  statLine: {
-    fontSize: 18,
-    opacity: 0.92,
-    marginBottom: 8,
-  },
-  smallMuted: {
-    fontSize: 16,
-    opacity: 0.82,
-    marginBottom: 8,
-  },
-  list: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 12,
-  },
-  listItem: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 12,
-    background: "rgba(96, 90, 255, 0.18)",
-    borderRadius: 18,
-    padding: "14px 16px",
-  },
-  listMeta: {
-    opacity: 0.9,
-    fontSize: 16,
-    whiteSpace: "nowrap",
-  },
-  footerSpace: {
-    paddingBottom: 28,
-  },
-};

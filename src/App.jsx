@@ -432,7 +432,30 @@ async function loadAiUserModels() {
       setSendingLink(false);
     }
   }
+  
+async function saveAiUserModels({
+  nextOptimization = aiOptimization,
+  nextEconomy = aiEconomy,
+  nextPolicy = aiPolicy,
+  nextAutopilot = aiAutopilot,
+}) {
+  if (!user?.id) return;
 
+  const { error } = await supabase
+    .from("ai_user_models")
+    .upsert({
+      user_id: user.id,
+      optimization: nextOptimization,
+      economy: nextEconomy,
+      policy: nextPolicy,
+      autopilot: nextAutopilot,
+    });
+
+  if (error) {
+    throw new Error(`AI user models tallennus epäonnistui: ${error.message}`);
+  }
+}
+  
   async function signOut() {
     await supabase.auth.signOut();
   }

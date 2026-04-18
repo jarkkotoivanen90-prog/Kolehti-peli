@@ -342,7 +342,66 @@ export default function App() {
       control: effectiveControl,
     };
   }, [effectiveOptimization, effectiveEconomy, aiPolicy, effectiveControl]);
+  
+async function loadAiUserModels() {
+  if (!user?.id) return;
 
+  const { data, error } = await supabase
+    .from("ai_user_models")
+    .select("*")
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`AI user models haku epäonnistui: ${error.message}`);
+  }
+
+  if (!data) {
+    const seedPayload = {
+      user_id: user.id,
+      optimization: DEFAULT_AI_OPTIMIZATION,
+      economy: DEFAULT_AI_ECONOMY,
+      policy: DEFAULT_AI_POLICY,
+      autopilot: DEFAULT_AI_AUTOPILOT,
+    };
+
+    const { data: created, error: createError } = await supabase
+      .from("ai_user_models")
+      .insert(seedPayload)
+      .select("*")
+      .single();
+
+    if (createError) {
+      throw new Error(`AI user models luonti epäonnistui: ${createError.message}`);
+    }
+
+    setAiOptimization(created?.optimization || DEFAULT_AI_OPTIMIZATION);
+    setAiEconomy(created?.economy || DEFAULT_AI_ECONOMY);
+    setAiPolicy(created?.policy || DEFAULT_AI_POLICY);
+    setAiAutopilot(created?.autopilot || DEFAULT_AI_AUTOPILOT);
+    return;
+  }
+
+  setAiOptimization(data?.optimization || DEFAULT_AI_OPTIMIZATION);
+  setAiEconomy(data?.economy || DEFAULT_AI_ECONOMY);
+  setAiPolicy(data?.policy || DEFAULT_AI_POLICY);
+  setAiAutopilot(data?.autopilot || DEFAULT_AI_AUTOPILOT);
+
+  if (typeof data?.reacts_to_loss === "number") {
+    setAiProfile((prev) => ({
+      ...prev,
+      reactsToLoss: data.reacts_to_loss ?? prev.reactsToLoss,
+      reactsToAlmostWin:
+        data.reacts_to_almost_win ?? prev.reactsToAlmostWin,
+      reactsToMomentum:
+        data.reacts_to_momentum ?? prev.reactsToMomentum,
+      paysInCriticalMoments:
+        data.pays_in_critical_moments ?? prev.paysInCriticalMoments,
+      ignoresOffers: data.ignores_offers ?? prev.ignoresOffers,
+    }));
+  }
+}
+  
   async function sendMagicLink(e) {
     e.preventDefault();
     setTopError("");

@@ -1,26 +1,75 @@
-import { runBoostEngine } from "../ai/engines/boostEngine";
-import { runVisibilityEngine } from "../ai/engines/visibilityEngine";
-import { runAutopilotEngine } from "../ai/engines/autopilotEngine";
-import { runRuntimeEngine } from "../ai/engines/runtimeEngine";
-import { applyPolicy } from "../ai/policy/policyEngine";
+import { useMemo } from "react";
+
+import { getBoostDecision } from "../ai/engines/boostEngine";
+import { getVisibilityDecision } from "../ai/engines/visibilityEngine";
+import { getAutopilotDecision } from "../ai/engines/autopilotEngine";
+import { getRuntimeState } from "../ai/engines/runtimeEngine";
 
 export function useAiStack({
-  inputs,
+  aiProfile,
   aiOptimization,
   aiEconomy,
   aiPolicy,
+  aiControlCenter,
+  aiAutopilot,
+  boostAnalyticsSummary,
+  context,
+  helpers,
 }) {
-  const boost = runBoostEngine(inputs, aiOptimization);
-  const visibility = runVisibilityEngine(inputs, aiEconomy);
-  const autopilot = runAutopilotEngine(inputs, aiOptimization);
-  const runtime = runRuntimeEngine(inputs);
+  return useMemo(() => {
+    const safeContext = context || {};
+    const safeHelpers = helpers || {};
 
-  const result = {
-    ...boost,
-    ...visibility,
-    ...autopilot,
-    ...runtime,
-  };
+    const boost = getBoostDecision({
+      gap: Number(safeContext.gap || 0),
+      momentum: Number(safeContext.momentum || 0),
+      visibility: Number(safeContext.visibility || 0),
+      boostsUsed: Number(safeContext.boostsUsed || 0),
+      selectedType: safeContext.selectedType || "week",
+      profile: aiProfile || {},
+      optimization: aiOptimization || {},
+      economy: aiEconomy || {},
+      getBoostPrice: safeHelpers.getBoostPrice,
+      drawTypes: safeHelpers.drawTypes || [],
+    });
 
-  return applyPolicy(result, aiPolicy);
+    const visibility = getVisibilityDecision({
+      gap: Number(safeContext.gap || 0),
+      momentum: Number(safeContext.momentum || 0),
+      visibility: Number(safeContext.visibility || 0),
+      selectedType: safeContext.selectedType || "week",
+      economy: aiEconomy || {},
+    });
+
+    const autopilot = getAutopilotDecision({
+      summary: boostAnalyticsSummary || {},
+      controlMode: aiControlCenter?.mode || "balanced",
+      autopilotModel: aiAutopilot || {},
+      policy: aiPolicy || {},
+    });
+
+    const runtime = getRuntimeState({
+      summary: boostAnalyticsSummary || {},
+      optimization: aiOptimization || {},
+      economy: aiEconomy || {},
+      controlMode: aiControlCenter?.mode || "balanced",
+    });
+
+    return {
+      boost,
+      visibility,
+      autopilot,
+      runtime,
+    };
+  }, [
+    aiProfile,
+    aiOptimization,
+    aiEconomy,
+    aiPolicy,
+    aiControlCenter,
+    aiAutopilot,
+    boostAnalyticsSummary,
+    context,
+    helpers,
+  ]);
 }

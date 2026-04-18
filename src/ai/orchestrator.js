@@ -7,20 +7,29 @@ export function runAiOrchestrator({
   profile,
   optimization,
   economy,
-  policy,
   control,
   analytics,
   context,
+  helpers,
 }) {
   const boost = getBoostDecision({
-    ...context,
+    gap: context.gap,
+    momentum: context.momentum,
+    visibility: context.visibility,
+    boostsUsed: context.boostsUsed,
+    selectedType: context.selectedType,
     profile,
     optimization,
     economy,
+    getBoostPrice: helpers.getBoostPrice,
+    drawTypes: helpers.drawTypes,
   });
 
   const visibility = getVisibilityDecision({
-    ...context,
+    gap: context.gap,
+    momentum: context.momentum,
+    visibility: context.visibility,
+    selectedType: context.selectedType,
     economy,
   });
 

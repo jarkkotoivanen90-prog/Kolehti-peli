@@ -5,28 +5,28 @@ export function useAiStack({
   aiProfile,
   aiOptimization,
   aiEconomy,
-  aiPolicy,
   aiControlCenter,
   boostAnalyticsSummary,
   context,
+  helpers,
 }) {
   return useMemo(() => {
     return runAiOrchestrator({
       profile: aiProfile,
       optimization: aiOptimization,
       economy: aiEconomy,
-      policy: aiPolicy,
       control: aiControlCenter,
       analytics: boostAnalyticsSummary,
       context,
+      helpers,
     });
   }, [
     aiProfile,
     aiOptimization,
     aiEconomy,
-    aiPolicy,
     aiControlCenter,
     boostAnalyticsSummary,
     context,
+    helpers,
   ]);
 }

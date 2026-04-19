@@ -1,3 +1,5 @@
+import React from "react";
+
 function TraceTable({ title, items = [] }) {
   return (
     <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
@@ -34,7 +36,8 @@ function TraceTable({ title, items = [] }) {
               </div>
 
               <div className="mt-1 text-sm text-white/60">
-                value: {typeof item.value === "object"
+                value:{" "}
+                {typeof item.value === "object"
                   ? JSON.stringify(item.value)
                   : String(item.value)}
               </div>
@@ -52,4 +55,18 @@ function TraceTable({ title, items = [] }) {
   );
 }
 
-export default TraceTable;
+export default function AiDebugPanel({
+  boostTrace = [],
+  visibilityTrace = [],
+  runtimeTrace = [],
+  autopilotTrace = [],
+}) {
+  return (
+    <div className="space-y-4">
+      <TraceTable title="Boost trace" items={boostTrace} />
+      <TraceTable title="Visibility trace" items={visibilityTrace} />
+      <TraceTable title="Runtime trace" items={runtimeTrace} />
+      <TraceTable title="Autopilot trace" items={autopilotTrace} />
+    </div>
+  );
+}

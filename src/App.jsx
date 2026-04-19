@@ -91,13 +91,6 @@ export default function App() {
     visibility: myPost?.visibility || 0,
   });
 
-  
-  async function handleBoost() {
-    if (!myPost) return;
-
-    setBoosting(true);
-
-  
 
   async function signOut() {
     await supabase.auth.signOut();

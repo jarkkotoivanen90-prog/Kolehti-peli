@@ -53,7 +53,8 @@ export function getBoostDecision({
 
   const showBoost = score >= Number(optimization?.softThreshold || 25);
 
-  const rawPrice = typeof getBoostPrice === "function" ? getBoostPrice(boostsUsed) : 1;
+  const rawPrice =
+    typeof getBoostPrice === "function" ? getBoostPrice(boostsUsed) : 1;
 
   const recommendedPrice = Math.max(
     1,

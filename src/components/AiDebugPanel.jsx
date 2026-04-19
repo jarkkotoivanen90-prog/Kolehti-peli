@@ -51,3 +51,5 @@ function TraceTable({ title, items = [] }) {
     </div>
   );
 }
+
+export default TraceTable;

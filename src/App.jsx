@@ -20,12 +20,6 @@ import FounderDashboard from "./components/ui/FounderDashboard";
 import AiDebugPanel from "./components/ui/AiDebugPanel";
 import AiTraceHistory from "./components/ui/AiTraceHistory";
 
-import { summarizeBoostAnalytics } from "./ai/analytics/analyticsEngine";
-import { buildEffectiveControl } from "./ai/control/controlEngine";
-import { applyPolicyLayer } from "./ai/policy/policyEngine";
-import { getRankingScore } from "./ai/ranking/rankingEngine";
-import { getAiState } from "./ai/state/aiState";
-
 const DRAW_TYPES = [
   { key: "day", label: "Päivä", boostLimit: 2 },
   { key: "week", label: "Viikko", boostLimit: 4 },

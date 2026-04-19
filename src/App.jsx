@@ -4,7 +4,6 @@ import { RefreshCw, LogOut, Target, Eye, TrendingUp, Coins } from "lucide-react"
 
 import { supabase } from "./supabase";
 import { useAiStack } from "./hooks/useAiStack";
-import { useAiStack } from "./hooks/useAiStack";
 import FounderDashboard from "./components/FounderDashboard";
 import AiDebugPanel from "./components/AiDebugPanel";
 import AiTraceHistory from "./components/AiTraceHistory";

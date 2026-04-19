@@ -1,14 +1,13 @@
-import React, { useEffect, useState } from "react";
-import { supabase } from "./supabase";
+import React from "react";
 
+import { useAuth } from "./hooks/useAuth";
+import { useUiState } from "./hooks/useUiState";
 import { useGameData } from "./hooks/useGameData";
 import { useAiSystem } from "./hooks/useAiSystem";
 
-// Layout
 import PageShell from "./components/layout/PageShell";
 import AppHeader from "./components/layout/AppHeader";
 
-// Cards
 import {
   PrimaryActionCard,
   BoostCard,
@@ -16,27 +15,24 @@ import {
   ToolsCard,
 } from "./components/cards";
 
+import FounderDashboard from "./components/ui/FounderDashboard";
+import AiDebugPanel from "./components/ui/AiDebugPanel";
+import AiTraceHistory from "./components/ui/AiTraceHistory";
+
+const FOUNDER_EMAILS = ["jarkko.toivanen90@gmail.com"];
+
 export default function App() {
-  const [user, setUser] = useState(null);
-  const [selectedType, setSelectedType] = useState("day");
+  const { user, authLoading, signOut } = useAuth();
 
-  const [debugOpen, setDebugOpen] = useState(false);
-  const [traceHistory, setTraceHistory] = useState([]);
+  const {
+    selectedType,
+    setSelectedType,
+    debugOpen,
+    setDebugOpen,
+    traceHistory,
+    setTraceHistory,
+  } = useUiState();
 
-  // --- AUTH ---
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setUser(data.session?.user || null);
-    });
-
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user || null);
-    });
-
-    return () => sub.subscription.unsubscribe();
-  }, []);
-
-  // --- GAME DATA ---
   const {
     myPost,
     leaderboard,
@@ -49,7 +45,6 @@ export default function App() {
     handleBoost,
   } = useGameData(user, selectedType);
 
-  // --- AI SYSTEM ---
   const {
     ai,
     aiState,
@@ -63,58 +58,83 @@ export default function App() {
     selectedType,
   });
 
-  // --- LOGIN SCREEN ---
+  const isFounder = FOUNDER_EMAILS.includes(user?.email || "");
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-950 text-white">
+        Ladataan...
+      </div>
+    );
+  }
+
   if (!user) {
     return (
-      <div className="min-h-screen flex items-center justify-center text-white">
+      <div className="min-h-screen flex items-center justify-center bg-slate-950 text-white">
         Kirjaudu sisään
       </div>
     );
   }
 
-  // --- MAIN UI ---
   return (
     <PageShell>
-      <AppHeader
-        user={user}
-        onLogout={() => supabase.auth.signOut()}
-      />
+      <AppHeader email={user.email} />
 
-      <div className="grid gap-4">
+      {error ? (
+        <div className="mb-4 rounded-2xl border border-red-400/20 bg-red-400/10 px-4 py-3 text-red-100">
+          {error}
+        </div>
+      ) : null}
 
+      <div className="space-y-5">
         <PrimaryActionCard
-          myPost={myPost}
           onVote={handleVote}
           voting={voting}
+          disabled={!myPost || loading}
         />
 
         <BoostCard
           myPost={myPost}
-          onBoost={handleBoost}
           boosting={boosting}
+          onBoost={handleBoost}
           decision={boostDecision}
         />
 
         <LeaderboardCard
-          leaderboard={rankedLeaderboard}
+          rankedLeaderboard={rankedLeaderboard}
           myPost={myPost}
           rank={rank}
+          gap={gap}
         />
 
         <ToolsCard
           selectedType={selectedType}
-          setSelectedType={setSelectedType}
-          gap={gap}
+          onChangeType={setSelectedType}
+          onRefresh={loadData}
+          onSignOut={signOut}
+          loading={loading}
         />
 
-      </div>
+        {isFounder ? (
+          <>
+            <FounderDashboard ai={ai} aiState={aiState} />
 
-      {/* DEBUG */}
-      {debugOpen && (
-        <div className="mt-6 text-xs text-gray-400">
-          <pre>{JSON.stringify({ aiState, ai }, null, 2)}</pre>
-        </div>
-      )}
+            <AiDebugPanel
+              isOpen={debugOpen}
+              onToggle={() => setDebugOpen((prev) => !prev)}
+              ai={ai}
+              aiState={aiState}
+              myPost={myPost}
+              leaderboard={rankedLeaderboard}
+            />
+
+            <AiTraceHistory
+              rows={traceHistory}
+              onChangeRows={setTraceHistory}
+            />
+          </>
+        ) : null}
+      </div>
     </PageShell>
   );
 }

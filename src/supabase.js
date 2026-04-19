@@ -1,10 +1,10 @@
 import { createClient } from "@supabase/supabase-js";
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;https://garqbefezreppqdheocw.supabase.co
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;"sb_publishable_VehM8pJcRzFJO3-ZQd3IeA_YQCqqqES";
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 if (!supabaseUrl || !supabaseAnonKey) {
-  console.error("❌ Supabase env puuttuu. Tarkista .env tiedosto.");
+  console.error("Supabase env puuttuu. Tarkista Vercel env-asetukset.");
 }
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabase";
 import { useAiStack } from "./hooks/useAiStack";
+import { useGameData } from "./hooks/useGameData"; 
 
 // Layout
 import PageShell from "./components/layout/PageShell";
@@ -33,12 +34,17 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [selectedType, setSelectedType] = useState("week");
 
-  const [myPost, setMyPost] = useState(null);
-  const [leaderboard, setLeaderboard] = useState([]);
-
-  const [loading, setLoading] = useState(false);
-  const [voting, setVoting] = useState(false);
-  const [boosting, setBoosting] = useState(false);
+  const {
+  myPost,
+  leaderboard,
+  loading,
+  voting,
+  boosting,
+  error,
+  loadData,
+  handleVote,
+  handleBoost,
+} = useGameData(user, selectedType);
 
   const [debugOpen, setDebugOpen] = useState(false);
   const [traceHistory, setTraceHistory] = useState([]);
@@ -55,26 +61,6 @@ export default function App() {
 
     return () => sub.subscription.unsubscribe();
   }, []);
-
-  // --- LOAD DATA ---
-  async function loadData() {
-    if (!user) return;
-    setLoading(true);
-
-    const { data } = await supabase
-      .from("posts")
-      .select("*")
-      .limit(20);
-
-    setLeaderboard(data || []);
-    setMyPost(data?.[0] || null);
-
-    setLoading(false);
-  }
-
-  useEffect(() => {
-    loadData();
-  }, [user, selectedType]);
 
   // --- AI ---
   const ai = useAiStack({
@@ -105,37 +91,13 @@ export default function App() {
     visibility: myPost?.visibility || 0,
   });
 
-  // --- ACTIONS ---
-  async function handleVote() {
-    if (!myPost) return;
-
-    setVoting(true);
-
-    await supabase
-      .from("posts")
-      .update({ votes: (myPost.votes || 0) + 1 })
-      .eq("id", myPost.id);
-
-    await loadData();
-    setVoting(false);
-  }
-
+  
   async function handleBoost() {
     if (!myPost) return;
 
     setBoosting(true);
 
-    await supabase
-      .from("posts")
-      .update({
-        momentum: (myPost.momentum || 0) + 5,
-        visibility: (myPost.visibility || 0) + 3,
-      })
-      .eq("id", myPost.id);
-
-    await loadData();
-    setBoosting(false);
-  }
+  
 
   async function signOut() {
     await supabase.auth.signOut();

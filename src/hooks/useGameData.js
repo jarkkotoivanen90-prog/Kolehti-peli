@@ -11,7 +11,7 @@ export function useGameData(user, selectedType) {
 
   const [error, setError] = useState("");
 
-  // --- LOAD ---
+  // --- LOAD DATA ---
   async function loadData() {
     if (!user) return;
 
@@ -29,12 +29,13 @@ export function useGameData(user, selectedType) {
       setLeaderboard(data || []);
       setMyPost(data?.[0] || null);
     } catch (err) {
-      setError(err.message || "Datan lataus epäonnistui");
+      setError(err.message || "Datan haku epäonnistui");
     } finally {
       setLoading(false);
     }
   }
 
+  // --- AUTO LOAD ---
   useEffect(() => {
     loadData();
   }, [user, selectedType]);
@@ -52,6 +53,7 @@ export function useGameData(user, selectedType) {
         .update({
           votes: Number(myPost.votes || 0) + 1,
           momentum: Number(myPost.momentum || 0) + 1,
+          visibility: Number(myPost.visibility || 0) + 1,
         })
         .eq("id", myPost.id);
 
@@ -78,6 +80,7 @@ export function useGameData(user, selectedType) {
         .update({
           momentum: Number(myPost.momentum || 0) + 5,
           visibility: Number(myPost.visibility || 0) + 3,
+          spent_total: Number(myPost.spent_total || 0) + 1,
           boosts_used: Number(myPost.boosts_used || 0) + 1,
         })
         .eq("id", myPost.id);
@@ -95,13 +98,10 @@ export function useGameData(user, selectedType) {
   return {
     myPost,
     leaderboard,
-
     loading,
     voting,
     boosting,
-
     error,
-
     loadData,
     handleVote,
     handleBoost,

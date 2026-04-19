@@ -7,12 +7,7 @@ export function sanitizeNumbers(obj = {}) {
 
   for (const key in obj) {
     const value = obj[key];
-
-    if (isInvalidNumber(value)) {
-      cleaned[key] = 0;
-    } else {
-      cleaned[key] = value;
-    }
+    cleaned[key] = isInvalidNumber(value) ? 0 : value;
   }
 
   return cleaned;

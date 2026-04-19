@@ -2,9 +2,9 @@ import React, { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 
 import { supabase } from "./supabase";
-
+import { useAiSystem } from "./hooks/useAiSystem";
 import { useGameData } from "./hooks/useGameData";
-import { useAiStack } from "./hooks/useAiStack";
+
 
 import PageShell from "./components/layout/PageShell";
 import AppHeader from "./components/layout/AppHeader";

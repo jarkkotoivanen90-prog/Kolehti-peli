@@ -4,7 +4,6 @@ import { getBoostDecision } from "../ai/engines/boostEngine";
 import { getVisibilityDecision } from "../ai/engines/visibilityEngine";
 import { getAutopilotDecision } from "../ai/engines/autopilotEngine";
 import { getRuntimeState } from "../ai/engines/runtimeEngine";
-
 import { safeRun } from "../ai/utils/aiGuard";
 
 export function useAiStack({
@@ -22,7 +21,6 @@ export function useAiStack({
     const safeContext = context || {};
     const safeHelpers = helpers || {};
 
-    // 🔥 BOOST
     const boost = safeRun(
       "boostEngine",
       () =>
@@ -47,7 +45,6 @@ export function useAiStack({
       }
     );
 
-    // 👁️ VISIBILITY
     const visibility = safeRun(
       "visibilityEngine",
       () =>
@@ -65,7 +62,6 @@ export function useAiStack({
       }
     );
 
-    // 🤖 AUTOPILOT
     const autopilot = safeRun(
       "autopilotEngine",
       () =>
@@ -82,7 +78,6 @@ export function useAiStack({
       }
     );
 
-    // ⚙️ RUNTIME
     const runtime = safeRun(
       "runtimeEngine",
       () =>

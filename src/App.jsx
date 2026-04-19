@@ -137,7 +137,29 @@ export default function App() {
     handleVote,
     handleBoost,
   } = useGameData(user, selectedType);
+  
+const {
+  ai,
+  aiState,
+  rankedLeaderboard,
+  gap,
+  currentRankNumber,
+} = useAiSystem({
+  myPost,
+  leaderboard,
+  selectedType,
 
+  aiProfile,
+  aiOptimization,
+  aiEconomy,
+  aiPolicy,
+  aiControlCenter,
+  aiAutopilot,
+  aiReleaseMode,
+
+  boostAnalytics,
+});
+  
   useEffect(() => {
     let mounted = true;
 

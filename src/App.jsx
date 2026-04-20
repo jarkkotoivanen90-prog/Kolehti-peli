@@ -18,9 +18,9 @@ import {
 import AlertBanner from "./components/ui/AlertBanner";
 import DrawTypeSelector from "./components/ui/DrawTypeSelector";
 import StatusCard from "./components/ui/StatusCard";
-import FounderDashboard from "./components/ui/FounderDashboard";
-import AiDebugPanel from "./components/ui/AiDebugPanel";
-import AiTraceHistory from "./components/ui/AiTraceHistory";
+import FounderDashboard from "./components/FounderDashboard";
+import AiDebugPanel from "./components/AiDebugPanel";
+import AiTraceHistory from "./components/AiTraceHistory";
 
 const DRAW_TYPES = [
   { key: "day", label: "Päivä", boostLimit: 2 },

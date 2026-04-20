@@ -17,7 +17,7 @@ import {
 
 import AlertBanner from "./components/ui/AlertBanner";
 import DrawTypeSelector from "./components/ui/DrawTypeSelector";
-import StatusCard from "./components/cards/StatusCard";
+import StatusCard from "./components/ui/StatusCard";
 import FounderDashboard from "./components/ui/FounderDashboard";
 import AiDebugPanel from "./components/ui/AiDebugPanel";
 import AiTraceHistory from "./components/ui/AiTraceHistory";

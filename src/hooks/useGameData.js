@@ -26,10 +26,14 @@ export function useGameData(user, selectedType) {
       throw new Error(`Arvonnan haku epäonnistui: ${error.message}`);
     }
 
-    return data;
+    return data ?? null;
   }, []);
 
   const ensureMyPost = useCallback(async (drawId, activeUser) => {
+    if (!drawId || !activeUser?.id) {
+      return null;
+    }
+
     const { data: existing, error: existingError } = await supabase
       .from("posts")
       .select("*")
@@ -63,10 +67,15 @@ export function useGameData(user, selectedType) {
       throw new Error(`Oman kolehdin luonti epäonnistui: ${createError.message}`);
     }
 
-    return created;
+    return created ?? null;
   }, []);
 
   const loadLeaderboard = useCallback(async (drawId) => {
+    if (!drawId) {
+      setLeaderboard([]);
+      return [];
+    }
+
     const { data, error } = await supabase
       .from("posts")
       .select("id, title, votes, momentum, visibility, spent_total, boosts_used, boosts, user_id")
@@ -79,11 +88,17 @@ export function useGameData(user, selectedType) {
       throw new Error(`Leaderboardin haku epäonnistui: ${error.message}`);
     }
 
-    setLeaderboard(data || []);
-    return data || [];
+    const rows = data || [];
+    setLeaderboard(rows);
+    return rows;
   }, []);
 
   const loadRecentPurchases = useCallback(async (userId) => {
+    if (!userId) {
+      setRecentPurchases([]);
+      return [];
+    }
+
     const { data, error } = await supabase
       .from("purchases")
       .select("id, type, amount, created_at")
@@ -93,6 +108,7 @@ export function useGameData(user, selectedType) {
 
     if (error) {
       const msg = error.message || "";
+
       if (
         msg.includes("does not exist") ||
         msg.includes("relation") ||
@@ -101,15 +117,32 @@ export function useGameData(user, selectedType) {
         setRecentPurchases([]);
         return [];
       }
+
       throw new Error(`Ostojen haku epäonnistui: ${error.message}`);
     }
 
-    setRecentPurchases(data || []);
-    return data || [];
+    const rows = data || [];
+    setRecentPurchases(rows);
+    return rows;
+  }, []);
+
+  const resetState = useCallback(() => {
+    setCurrentDraw(null);
+    setMyPost(null);
+    setLeaderboard([]);
+    setRecentPurchases([]);
+    setLoadingData(false);
+    setVoting(false);
+    setBoosting(false);
+    setError("");
+    setInfo("");
   }, []);
 
   const loadData = useCallback(async () => {
-    if (!user) return;
+    if (!user?.id) {
+      resetState();
+      return;
+    }
 
     setLoadingData(true);
     setError("");
@@ -122,7 +155,8 @@ export function useGameData(user, selectedType) {
         setCurrentDraw(null);
         setMyPost(null);
         setLeaderboard([]);
-        setError("Omaa kolehtia ei löytynyt");
+        setRecentPurchases([]);
+        setError("Aktiivista arvontaa ei löytynyt.");
         return;
       }
 
@@ -136,6 +170,7 @@ export function useGameData(user, selectedType) {
         loadRecentPurchases(user.id),
       ]);
     } catch (err) {
+      console.error("useGameData loadData failed:", err);
       setError(err.message || "Datan lataus epäonnistui.");
     } finally {
       setLoadingData(false);
@@ -147,6 +182,7 @@ export function useGameData(user, selectedType) {
     ensureMyPost,
     loadLeaderboard,
     loadRecentPurchases,
+    resetState,
   ]);
 
   useEffect(() => {
@@ -154,7 +190,7 @@ export function useGameData(user, selectedType) {
   }, [loadData]);
 
   const handleVote = useCallback(async () => {
-    if (!myPost || !currentDraw) return;
+    if (!myPost?.id || !currentDraw?.id) return;
 
     setVoting(true);
     setError("");
@@ -174,11 +210,12 @@ export function useGameData(user, selectedType) {
 
       if (error) throw error;
 
-      setMyPost(data);
+      setMyPost(data ?? null);
       setInfo("Ääni lisätty.");
 
       await loadLeaderboard(currentDraw.id);
     } catch (err) {
+      console.error("Vote failed:", err);
       setError(`Äänen tallennus epäonnistui: ${err.message}`);
     } finally {
       setVoting(false);
@@ -186,7 +223,7 @@ export function useGameData(user, selectedType) {
   }, [myPost, currentDraw, loadLeaderboard]);
 
   const handleBoost = useCallback(async () => {
-    if (!myPost || !currentDraw) return;
+    if (!myPost?.id || !currentDraw?.id || !user?.id) return;
 
     setBoosting(true);
     setError("");
@@ -215,6 +252,7 @@ export function useGameData(user, selectedType) {
 
       if (purchaseError) {
         const msg = purchaseError.message || "";
+
         if (
           !msg.includes("does not exist") &&
           !msg.includes("relation") &&
@@ -224,7 +262,7 @@ export function useGameData(user, selectedType) {
         }
       }
 
-      setMyPost(data);
+      setMyPost(data ?? null);
       setInfo("Boost käytetty.");
 
       await Promise.all([
@@ -232,6 +270,7 @@ export function useGameData(user, selectedType) {
         loadRecentPurchases(user.id),
       ]);
     } catch (err) {
+      console.error("Boost failed:", err);
       setError(`Boost epäonnistui: ${err.message}`);
     } finally {
       setBoosting(false);

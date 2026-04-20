@@ -50,6 +50,7 @@ export default function App() {
       try {
         const { data, error } = await supabase.auth.getSession();
         if (error) throw error;
+
         if (!mounted) return;
 
         const nextUser = data?.session?.user ?? null;
@@ -58,9 +59,7 @@ export default function App() {
       } catch (err) {
         console.error("Auth init failed:", err);
       } finally {
-        if (mounted) {
-          setAuthLoading(false);
-        }
+        if (mounted) setAuthLoading(false);
       }
     }
 
@@ -81,39 +80,38 @@ export default function App() {
     };
   }, []);
 
-  const game = useGameData(user, selectedType) || {};
+  const {
+    currentDraw,
+    myPost,
+    leaderboard,
+    recentPurchases,
+
+    loadingData,
+    voting,
+    boosting,
+
+    error,
+    info,
+
+    setError,
+    setInfo,
+
+    loadData,
+    handleVote,
+    handleBoost,
+  } = useGameData(user, selectedType);
 
   const {
-    currentDraw = null,
-    myPost = null,
-    leaderboard = [],
-    recentPurchases = [],
-    loadingData = false,
-    voting = false,
-    boosting = false,
-    error = "",
-    info = "",
-    setError = () => {},
-    setInfo = () => {},
-    loadData = async () => {},
-    handleVote = async () => {},
-    handleBoost = async () => {},
-  } = game;
-
-  const aiSystem =
-    useAiSystem({
-      myPost,
-      leaderboard,
-      selectedType,
-    }) || {};
-
-  const {
-    ai = {},
-    aiState = "",
-    rankedLeaderboard = [],
-    gap = 0,
-    currentRankNumber = 0,
-  } = aiSystem;
+    ai,
+    aiState,
+    rankedLeaderboard,
+    gap,
+    currentRankNumber,
+  } = useAiSystem({
+    myPost,
+    leaderboard,
+    selectedType,
+  });
 
   const isFounder = FOUNDER_EMAILS.includes(user?.email || "");
 
@@ -165,7 +163,7 @@ export default function App() {
     }
   }
 
-  async function handleSafeMode() {
+  function handleSafeMode() {
     setInfo("Safe mode aktivoitu.");
   }
 
@@ -291,7 +289,8 @@ export default function App() {
 
         <div className="mt-4 grid gap-3 text-sm text-white/70">
           <div>
-            Boost urgency: <span className="text-white">{ai?.boost?.urgency ?? "-"}</span>
+            Boost urgency:{" "}
+            <span className="text-white">{ai?.boost?.urgency ?? "-"}</span>
           </div>
           <div>
             Autopilot mode:{" "}

@@ -1,3 +1,4 @@
+console.log("APP START");
 import React, { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 

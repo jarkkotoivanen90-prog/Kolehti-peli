@@ -4,8 +4,7 @@ const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 if (!supabaseUrl || !supabaseAnonKey) {
-  console.error("Supabase env puuttuu. Tarkista Vercel env-asetukset.");
+  throw new Error("Supabase env puuttuu. Lisää Verceliin VITE_SUPABASE_URL ja VITE_SUPABASE_ANON_KEY");
 }
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
- 

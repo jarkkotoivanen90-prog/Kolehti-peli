@@ -1,9 +1,6 @@
 import React from "react";
+import { supabase } from "./supabase";
 
 export default function App() {
-  return (
-    <div style={{ padding: "24px", color: "white", background: "black", minHeight: "100vh" }}>
-      APP OK
-    </div>
-  );
+  return <div>STEP 1 OK</div>;
 }

@@ -375,4 +375,14 @@ input {
   white-space: pre-wrap;
   word-break: break-word;
   color: #cbd5e1;
+  
+}
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* optional reset */
+body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
 }

@@ -1,38 +1,41 @@
-import React, { useEffect, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-
+import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabase";
 import { useGameData } from "./hooks/useGameData";
 import { useAiSystem } from "./hooks/useAiSystem";
-
-import PageShell from "./components/layout/PageShell";
-import AppHeader from "./components/layout/AppHeader";
-
-import {
-  PrimaryActionCard,
-  BoostCard,
-  LeaderboardCard,
-  ToolsCard,
-} from "./components/cards";
-
-import AlertBanner from "./components/ui/AlertBanner";
-import DrawTypeSelector from "./components/ui/DrawTypeSelector";
-import StatusCard from "./components/ui/StatusCard";
-
-import FounderDashboard from "./components/FounderDashboard";
-import AiDebugPanel from "./components/AiDebugPanel";
-import AiTraceHistory from "./components/AiTraceHistory";
+import "./index.css";
 
 const DRAW_TYPES = [
-  { key: "day", label: "Päivä", boostLimit: 2 },
-  { key: "week", label: "Viikko", boostLimit: 4 },
-  { key: "month", label: "Kuukausi", boostLimit: 6 },
+  { key: "day", label: "Päivä" },
+  { key: "week", label: "Viikko" },
+  { key: "month", label: "Kuukausi" },
 ];
 
 const FOUNDER_EMAILS = ["jarkko.toivanen90@gmail.com"];
 
 function euro(value) {
   return `${Number(value || 0).toFixed(2)} €`;
+}
+
+function SectionCard({ title, children, right }) {
+  return (
+    <section className="card">
+      <div className="card-header">
+        <h2>{title}</h2>
+        {right ? <div>{right}</div> : null}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function MessageBar({ error, info }) {
+  if (!error && !info) return null;
+
+  return (
+    <div className={error ? "message message-error" : "message message-info"}>
+      {error || info}
+    </div>
+  );
 }
 
 export default function App() {
@@ -115,10 +118,12 @@ export default function App() {
 
   const isFounder = FOUNDER_EMAILS.includes(user?.email || "");
 
-  const boostTrace = ai?.boost?.trace || [];
-  const visibilityTrace = ai?.visibility?.trace || [];
-  const runtimeTrace = ai?.runtime?.trace || [];
-  const autopilotTrace = ai?.autopilot?.trace || [];
+  const leaderboardRows = useMemo(() => {
+    return (rankedLeaderboard || []).map((row, index) => ({
+      ...row,
+      place: index + 1,
+    }));
+  }, [rankedLeaderboard]);
 
   async function sendMagicLink(e) {
     e.preventDefault();
@@ -135,7 +140,8 @@ export default function App() {
     setSendingLink(true);
 
     try {
-      const redirectTo = import.meta.env.VITE_APP_URL || window.location.origin;
+      const redirectTo =
+        import.meta.env.VITE_APP_URL || window.location.origin;
 
       const { error: signInError } = await supabase.auth.signInWithOtp({
         email: nextEmail,
@@ -163,212 +169,285 @@ export default function App() {
     }
   }
 
-  function handleSafeMode() {
-    setInfo("Safe mode aktivoitu.");
-  }
-
   if (authLoading) {
     return (
-      <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
-        <div className="rounded-3xl border border-white/10 bg-white/5 px-8 py-6 backdrop-blur">
-          Ladataan...
-        </div>
+      <div className="app-shell center-screen">
+        <div className="loading-box">Ladataan...</div>
       </div>
     );
   }
 
   if (!user) {
     return (
-      <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(59,76,202,0.28),_rgba(2,6,23,1)_42%)] text-white flex items-center justify-center p-6">
-        <motion.form
-          initial={{ opacity: 0, y: 18 }}
-          animate={{ opacity: 1, y: 0 }}
-          onSubmit={sendMagicLink}
-          className="w-full max-w-xl rounded-[32px] border border-white/10 bg-white/5 p-8 shadow-2xl backdrop-blur-xl"
-        >
-          <div className="mb-2 text-sm font-black tracking-[0.3em] text-white/80">
-            KOLEHTI
-          </div>
-
-          <h1 className="text-5xl font-black leading-none md:text-7xl">
-            Kirjaudu sisään
-          </h1>
-
-          <p className="mt-3 text-lg text-white/70">
+      <div className="app-shell center-screen">
+        <form className="login-card" onSubmit={sendMagicLink}>
+          <div className="eyebrow">KOLEHTI</div>
+          <h1 className="login-title">Kirjaudu sisään</h1>
+          <p className="login-subtitle">
             Saat sähköpostiisi kirjautumislinkin.
           </p>
 
+          <MessageBar error={error} info={info} />
+
           <input
-            className="mt-8 w-full rounded-[24px] border border-white/10 bg-white/5 px-5 py-4 text-xl outline-none placeholder:text-white/35"
+            className="text-input"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="sinä@esimerkki.fi"
             type="email"
           />
 
-          <button
-            type="submit"
-            disabled={sendingLink}
-            className="mt-5 w-full rounded-[24px] bg-gradient-to-r from-indigo-500 to-violet-500 px-5 py-4 text-xl font-extrabold shadow-lg shadow-violet-900/30 transition hover:scale-[1.01] active:scale-[0.99] disabled:opacity-60"
-          >
+          <button className="primary-button big-button" type="submit" disabled={sendingLink}>
             {sendingLink ? "Lähetetään..." : "Lähetä kirjautumislinkki"}
           </button>
-
-          <AnimatePresence>
-            {error ? (
-              <motion.div
-                initial={{ opacity: 0, y: -6 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                className="mt-4 text-red-300"
-              >
-                {error}
-              </motion.div>
-            ) : null}
-
-            {info ? (
-              <motion.div
-                initial={{ opacity: 0, y: -6 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                className="mt-4 text-emerald-300"
-              >
-                {info}
-              </motion.div>
-            ) : null}
-          </AnimatePresence>
-        </motion.form>
+        </form>
       </div>
     );
   }
 
   return (
-    <PageShell>
-      <AppHeader email={user.email} />
-
-      <AlertBanner error={error} info={info} />
-
-      <DrawTypeSelector
-        drawTypes={DRAW_TYPES}
-        selectedType={selectedType}
-        onSelect={setSelectedType}
-      />
-
-      <StatusCard
-        rank={currentRankNumber > 0 ? `#${currentRankNumber}` : "-"}
-        gap={gap}
-        myPost={myPost}
-        euro={euro}
-      />
-
-      <PrimaryActionCard
-        onVote={handleVote}
-        voting={voting}
-        disabled={!myPost || loadingData}
-      />
-
-      <BoostCard
-        myPost={myPost}
-        boosting={boosting}
-        onBoost={handleBoost}
-      />
-
-      <LeaderboardCard
-        rankedLeaderboard={rankedLeaderboard}
-        euro={euro}
-      />
-
-      <div className="rounded-[30px] border border-white/10 bg-white/5 p-5 backdrop-blur-xl shadow-2xl mb-5">
-        <div className="mb-4 text-lg text-white/85">AI status</div>
-
-        <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-4 text-white/90">
-          {typeof aiState === "string"
-            ? aiState
-            : aiState?.title || "AI aktiivinen"}
-        </div>
-
-        <div className="mt-4 grid gap-3 text-sm text-white/70">
+    <div className="app-shell">
+      <div className="container">
+        <header className="hero">
           <div>
-            Boost urgency:{" "}
-            <span className="text-white">{ai?.boost?.urgency ?? "-"}</span>
+            <div className="eyebrow">KOLEHTI</div>
+            <h1 className="hero-title">Kolehti AI</h1>
+            <div className="hero-subtitle">{user.email}</div>
           </div>
-          <div>
-            Autopilot mode:{" "}
-            <span className="text-white">
-              {ai?.autopilot?.recommendedMode ?? "-"}
-            </span>
-          </div>
-          <div>
-            Runtime health:{" "}
-            <span className="text-white">{ai?.runtime?.health ?? "-"}</span>
-          </div>
-          <div>
-            Aktiivinen draw:{" "}
-            <span className="text-white">{currentDraw?.type || selectedType}</span>
-          </div>
-        </div>
-      </div>
 
-      <div className="rounded-[30px] border border-white/10 bg-white/5 p-5 backdrop-blur-xl shadow-2xl mb-5">
-        <div className="mb-4 text-lg text-white/85">Viimeisimmät ostot</div>
-
-        {recentPurchases.length === 0 ? (
-          <div className="text-white/60">Ei vielä ostoja.</div>
-        ) : (
-          <div className="space-y-3">
-            {recentPurchases.map((purchase) => (
-              <div
-                key={purchase.id}
-                className="flex items-center justify-between rounded-2xl border border-white/10 bg-black/20 px-4 py-3"
-              >
-                <div className="text-white font-semibold">
-                  {purchase.type || "Osto"}
-                </div>
-                <div className="text-white/80">
-                  {euro(purchase.amount || 0)}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {isFounder ? (
-        <>
-          <FounderDashboard
-            ai={ai}
-            profile={ai?.profile || {}}
-            releaseMode={ai?.releaseMode || "balanced"}
-            onSafe={handleSafeMode}
-          />
-
-          <div className="mb-5">
-            <button
-              onClick={() => setDebugOpen((prev) => !prev)}
-              className="w-full rounded-[22px] border border-white/10 bg-white/5 px-5 py-4 text-left text-lg font-bold text-white"
-            >
-              {debugOpen ? "Piilota debug" : "Näytä debug"}
+          <div className="header-actions">
+            <button className="secondary-button" onClick={loadData}>
+              Päivitä
+            </button>
+            <button className="secondary-button danger-button" onClick={signOut}>
+              Logout
             </button>
           </div>
+        </header>
 
-          {debugOpen ? (
-            <div className="mb-5">
-              <AiDebugPanel
-                boostTrace={boostTrace}
-                visibilityTrace={visibilityTrace}
-                runtimeTrace={runtimeTrace}
-                autopilotTrace={autopilotTrace}
-              />
-            </div>
-          ) : null}
+        <MessageBar error={error} info={info} />
 
-          <div className="mb-5">
-            <AiTraceHistory rows={ai?.traceHistory || []} />
+        <SectionCard title="Arvonnan tyyppi">
+          <div className="tabs">
+            {DRAW_TYPES.map((draw) => (
+              <button
+                key={draw.key}
+                className={
+                  selectedType === draw.key
+                    ? "tab-button tab-button-active"
+                    : "tab-button"
+                }
+                onClick={() => setSelectedType(draw.key)}
+              >
+                {draw.label}
+              </button>
+            ))}
           </div>
-        </>
-      ) : null}
+        </SectionCard>
 
-      <ToolsCard onRefresh={loadData} onSignOut={signOut} />
-    </PageShell>
+        <div className="grid-two">
+          <SectionCard title="Oma tilanne">
+            <div className="stat-hero">
+              {currentRankNumber > 0 ? `#${currentRankNumber}` : "-"}
+            </div>
+
+            <div className="status-chip">
+              {typeof aiState === "string"
+                ? aiState
+                : aiState?.title || "Tilanne auki"}
+            </div>
+
+            <div className="stats-list">
+              <div className="stat-row">
+                <span>Ero</span>
+                <strong>{gap}</strong>
+              </div>
+              <div className="stat-row">
+                <span>Momentum</span>
+                <strong>{myPost?.momentum ?? 0}</strong>
+              </div>
+              <div className="stat-row">
+                <span>Omat äänet</span>
+                <strong>{myPost?.votes ?? 0}</strong>
+              </div>
+              <div className="stat-row">
+                <span>Näkyvyys</span>
+                <strong>{myPost?.visibility ?? 0}</strong>
+              </div>
+              <div className="stat-row">
+                <span>Kulutus</span>
+                <strong>{euro(myPost?.spent_total ?? 0)}</strong>
+              </div>
+              <div className="stat-row">
+                <span>Aktiivinen draw</span>
+                <strong>{currentDraw?.type || selectedType}</strong>
+              </div>
+            </div>
+          </SectionCard>
+
+          <SectionCard title="Toiminnot">
+            <div className="action-stack">
+              <button
+                className="primary-button"
+                onClick={handleVote}
+                disabled={!myPost || loadingData || voting}
+              >
+                {voting ? "Äänestetään..." : "Äänestä"}
+              </button>
+
+              <button
+                className="accent-button"
+                onClick={handleBoost}
+                disabled={!myPost || loadingData || boosting}
+              >
+                {boosting ? "Boostataan..." : "Boostaa"}
+              </button>
+            </div>
+
+            <div className="mini-note">
+              {loadingData
+                ? "Data latautuu..."
+                : "Voit nostaa sijoitusta äänillä ja boosteilla."}
+            </div>
+          </SectionCard>
+        </div>
+
+        <div className="grid-two">
+          <SectionCard title="Leaderboard">
+            {leaderboardRows.length === 0 ? (
+              <div className="empty-state">Ei vielä rivejä.</div>
+            ) : (
+              <div className="leaderboard-list">
+                {leaderboardRows.map((row) => (
+                  <div
+                    key={row.id}
+                    className={
+                      row.id === myPost?.id
+                        ? "leader-row leader-row-me"
+                        : "leader-row"
+                    }
+                  >
+                    <div className="leader-main">
+                      <div className="leader-rank">#{row.place}</div>
+                      <div>
+                        <div className="leader-title">{row.title || "Kolehti"}</div>
+                        <div className="leader-meta">
+                          Äänet {row.votes ?? 0} · Momentum {row.momentum ?? 0} ·
+                          Näkyvyys {row.visibility ?? 0}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="leader-score">
+                      {typeof row.rankingScore === "number"
+                        ? row.rankingScore.toFixed(2)
+                        : "0.00"}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </SectionCard>
+
+          <SectionCard title="AI status">
+            <div className="stats-list">
+              <div className="stat-row">
+                <span>AI state</span>
+                <strong>
+                  {typeof aiState === "string"
+                    ? aiState
+                    : aiState?.title || "active"}
+                </strong>
+              </div>
+              <div className="stat-row">
+                <span>Boost urgency</span>
+                <strong>{ai?.boost?.urgency ?? "-"}</strong>
+              </div>
+              <div className="stat-row">
+                <span>Autopilot mode</span>
+                <strong>{ai?.autopilot?.recommendedMode ?? "-"}</strong>
+              </div>
+              <div className="stat-row">
+                <span>Runtime health</span>
+                <strong>{ai?.runtime?.health ?? "-"}</strong>
+              </div>
+              <div className="stat-row">
+                <span>Recommended price</span>
+                <strong>{euro(ai?.boost?.recommendedPrice ?? 0)}</strong>
+              </div>
+            </div>
+          </SectionCard>
+        </div>
+
+        <SectionCard title="Viimeisimmät ostot">
+          {recentPurchases.length === 0 ? (
+            <div className="empty-state">Ei vielä ostoja.</div>
+          ) : (
+            <div className="purchase-list">
+              {recentPurchases.map((purchase) => (
+                <div className="purchase-row" key={purchase.id}>
+                  <div>
+                    <div className="purchase-type">{purchase.type || "Osto"}</div>
+                    <div className="purchase-date">
+                      {purchase.created_at
+                        ? new Date(purchase.created_at).toLocaleString("fi-FI")
+                        : "-"}
+                    </div>
+                  </div>
+                  <strong>{euro(purchase.amount || 0)}</strong>
+                </div>
+              ))}
+            </div>
+          )}
+        </SectionCard>
+
+        {isFounder ? (
+          <SectionCard
+            title="Founder Dashboard"
+            right={
+              <button
+                className="secondary-button"
+                onClick={() => setDebugOpen((prev) => !prev)}
+              >
+                {debugOpen ? "Piilota debug" : "Näytä debug"}
+              </button>
+            }
+          >
+            <div className="stats-list founder-grid">
+              <div className="stat-row">
+                <span>Health</span>
+                <strong>{ai?.runtime?.health ?? "-"}</strong>
+              </div>
+              <div className="stat-row">
+                <span>Ignore</span>
+                <strong>
+                  {Number(ai?.runtime?.ignoreRate ?? 0).toFixed(1)}%
+                </strong>
+              </div>
+              <div className="stat-row">
+                <span>Purchase</span>
+                <strong>
+                  {Number(ai?.runtime?.purchaseRate ?? 0).toFixed(1)}%
+                </strong>
+              </div>
+              <div className="stat-row">
+                <span>Boost urgency</span>
+                <strong>{ai?.boost?.urgency ?? "-"}</strong>
+              </div>
+              <div className="stat-row">
+                <span>Autopilot</span>
+                <strong>{ai?.autopilot?.automationAction ?? "-"}</strong>
+              </div>
+            </div>
+
+            {debugOpen ? (
+              <div className="debug-box">
+                <pre>{JSON.stringify({ ai, aiState, myPost }, null, 2)}</pre>
+              </div>
+            ) : null}
+          </SectionCard>
+        ) : null}
+      </div>
+    </div>
   );
 }
